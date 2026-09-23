@@ -5,8 +5,8 @@ use std::fs;
 use std::process::ExitCode;
 
 use minesweeper_engine::{
-    generate, play_forced, replay, Action, CellPos, Fixture, Game, GenerateRequest, Status,
-    DEFAULT_ATTEMPTS,
+    generate, play_forced, replay, run_session, Action, CellPos, Fixture, Game, GenerateRequest,
+    Status, DEFAULT_ATTEMPTS,
 };
 
 fn main() -> ExitCode {
@@ -15,6 +15,7 @@ fn main() -> ExitCode {
         Some("generate") => cmd_generate(&args.collect::<Vec<_>>()),
         Some("play") => cmd_play(&args.collect::<Vec<_>>()),
         Some("demo") => cmd_demo(),
+        Some("session") => cmd_session(&args.collect::<Vec<_>>()),
         Some("help") | Some("--help") | Some("-h") | None => {
             print_help();
             ExitCode::SUCCESS
@@ -32,8 +33,24 @@ fn print_help() {
         "\
 msengine generate --seed N --rows R --cols C --mines M [--attempts N] [--out file.json]
 msengine play file.json
-msengine demo"
+msengine demo
+msengine session"
     );
+}
+
+fn cmd_session(args: &[String]) -> ExitCode {
+    if !args.is_empty() {
+        eprintln!("session reads JSON lines on stdin and takes no arguments");
+        print_help();
+        return ExitCode::from(2);
+    }
+    match run_session() {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("{error}");
+            ExitCode::from(1)
+        }
+    }
 }
 
 fn cmd_generate(args: &[String]) -> ExitCode {

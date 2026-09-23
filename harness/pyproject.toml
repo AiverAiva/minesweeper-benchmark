@@ -1,0 +1,22 @@
+[project]
+name = "msbench"
+version = "0.1.0"
+description = "Text harness for the minesweeper reasoning benchmark."
+requires-python = ">=3.13"
+dependencies = []
+
+[project.scripts]
+msbench = "msbench.__main__:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[build-system]
+requires = ["uv_build>=0.9.11,<0.10.0"]
+build-backend = "uv_build"

@@ -1,2 +1,10 @@
 /target
 **/*.rs.bk
+__pycache__/
+.pytest_cache/
+*.py[cod]
+.venv/
+runs/
+.env
+.env.*
+!.env.example

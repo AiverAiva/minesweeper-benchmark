@@ -9,6 +9,7 @@ mod game;
 mod generate;
 mod oracle;
 mod render;
+mod session;
 
 pub use fixture::{replay, Fixture, GoldStep, ReplayError};
 pub use game::{
@@ -18,3 +19,4 @@ pub use generate::{
     generate, play_forced, GenerateError, GenerateRequest, PlayError, DEFAULT_ATTEMPTS,
 };
 pub use oracle::{forced, ForceError, Forced, Tier, MAX_ENUM_CELLS, ORACLE_VERSION};
+pub use session::{handle_session_line, run_session};
