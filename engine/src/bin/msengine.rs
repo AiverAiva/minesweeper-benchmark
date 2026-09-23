@@ -31,7 +31,7 @@ fn main() -> ExitCode {
 fn print_help() {
     println!(
         "\
-msengine generate --seed N --rows R --cols C --mines M [--attempts N] [--out file.json]
+msengine generate [--seed N] --rows R --cols C --mines M [--attempts N] [--out file.json]
 msengine play file.json
 msengine demo
 msengine session"
@@ -67,8 +67,8 @@ fn cmd_generate(args: &[String]) -> ExitCode {
         Ok(fixture) => {
             print!("{}", fixture.initial_text);
             println!(
-                "attempts: {}\nbbbv: {}\nmax_tier: {}\ngold_steps: {}",
-                fixture.attempts,
+                "seed: {}\nattempts: {}\nbbbv: {}\nmax_tier: {}\ngold_steps: {}",
+                fixture.seed, fixture.attempts,
                 fixture.bbbv,
                 fixture.max_tier,
                 fixture.gold.len()
@@ -126,7 +126,7 @@ fn parse_generate(args: &[String]) -> Result<GenerateArgs, String> {
         }
         index += 2;
     }
-    let seed = seed.ok_or("--seed is required")?;
+    let seed = seed.unwrap_or_else(rand::random::<u64>);
     let rows = rows.ok_or("--rows is required")?;
     let cols = cols.ok_or("--cols is required")?;
     let mines = mines.ok_or("--mines is required")?;
