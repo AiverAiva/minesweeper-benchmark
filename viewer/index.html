@@ -1,0 +1,1517 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Logs</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --canvas: #F7F6F3;
+      --paper: #FBFBFA;
+      --surface: #FFFFFF;
+      --line: #EAEAEA;
+      --ink: #2F3437;
+      --strong: #111111;
+      --muted: #787774;
+      --green-bg: #EDF3EC;
+      --green: #346538;
+      --red-bg: #FDEBEC;
+      --red: #9F2F2D;
+      --blue-bg: #E1F3FE;
+      --blue: #1F6C9F;
+      --yellow-bg: #FBF3DB;
+      --yellow: #956400;
+      --hidden: #E4E1DB;
+      --serif: "Iowan Old Style", "Palatino Linotype", Palatino, "PMingLiU", "Songti TC", serif;
+      --sans: "Segoe UI", "Microsoft JhengHei", "PingFang TC", "Helvetica Neue", sans-serif;
+      --mono: "Cascadia Mono", "Cascadia Code", Consolas, "Microsoft JhengHei", monospace;
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body { height: 100%; }
+
+    body {
+      margin: 0;
+      background: var(--canvas);
+      color: var(--ink);
+      font-family: var(--sans);
+      font-size: 15px;
+      line-height: 1.6;
+      word-break: keep-all;
+    }
+
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background: radial-gradient(ellipse at 12% 0%, rgba(149, 100, 0, 0.045), transparent 46%);
+      z-index: 0;
+    }
+
+    ::selection { background: #FBF3DB; color: var(--strong); }
+
+    :focus-visible {
+      outline: 2px solid var(--strong);
+      outline-offset: 2px;
+    }
+
+    button {
+      font: inherit;
+      color: inherit;
+      background: none;
+      border: 0;
+      padding: 0;
+      cursor: pointer;
+    }
+
+    .app {
+      position: relative;
+      z-index: 1;
+      height: 100vh;
+      display: grid;
+      grid-template-columns: 300px minmax(0, 1fr);
+      grid-template-rows: auto minmax(0, 1fr);
+    }
+
+    .top {
+      grid-column: 1 / -1;
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      padding: 16px 28px;
+      border-bottom: 1px solid var(--line);
+      background: var(--paper);
+    }
+
+    .brand {
+      font-family: var(--mono);
+      font-size: 12px;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+
+    .brand-mark {
+      font-family: var(--serif);
+      font-size: 18px;
+      letter-spacing: -0.03em;
+    }
+
+    aside, main { min-height: 0; overflow: auto; }
+
+    aside {
+      background: var(--paper);
+      border-right: 1px solid var(--line);
+      padding: 28px 22px 48px;
+    }
+
+    main { padding: 48px 56px 96px; }
+
+    .primary {
+      background: var(--strong);
+      color: #fff;
+      border-radius: 4px;
+      padding: 8px 14px;
+      font-size: 13px;
+    }
+
+    .primary:hover { background: #333333; }
+    .primary:active { transform: scale(0.98); }
+
+    .ghost {
+      margin-left: 8px;
+      border: 1px solid var(--line);
+      background: var(--surface);
+      border-radius: 4px;
+      padding: 8px 12px;
+      font-size: 13px;
+      color: var(--ink);
+    }
+
+    .ghost:hover { background: #F3F2EF; }
+
+    .tools { margin-bottom: 28px; }
+
+    .kicker {
+      margin: 28px 0 8px;
+      font-family: var(--mono);
+      font-size: 11px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+
+    .tools + .kicker { margin-top: 0; }
+
+    .tally {
+      margin: 0 0 8px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    .hint {
+      margin: 12px 0 0;
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 11px;
+      letter-spacing: 0.04em;
+    }
+
+    .file, .step {
+      display: block;
+      width: 100%;
+      text-align: left;
+      border-bottom: 1px solid var(--line);
+      padding: 12px 8px;
+    }
+
+    .file:hover, .step:hover { background: rgba(0, 0, 0, 0.025); }
+
+    .file[aria-current="true"], .step[aria-current="true"] {
+      background: var(--surface);
+      box-shadow: inset 2px 0 0 var(--strong);
+    }
+
+    .file .title {
+      display: block;
+      font-size: 14px;
+      color: var(--strong);
+    }
+
+    .file .meta, .step .act {
+      display: block;
+      margin-top: 2px;
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 12px;
+    }
+
+    .step {
+      display: grid;
+      grid-template-columns: 28px minmax(0, 1fr);
+      column-gap: 10px;
+      row-gap: 2px;
+      align-items: baseline;
+    }
+
+    .step .idx {
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .step .name { font-size: 14px; color: var(--strong); }
+    .step .act { grid-column: 2; }
+
+    .episode {
+      margin: 16px 0 0;
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 11px;
+      word-break: break-all;
+    }
+
+    .record { max-width: 1040px; }
+
+    .record.enter {
+      animation: rise 600ms cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    @keyframes rise {
+      from { opacity: 0; transform: translateY(12px); }
+      to { opacity: 1; transform: none; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .record.enter { animation: none; }
+    }
+
+    h1 {
+      margin: 8px 0 0;
+      font-family: var(--serif);
+      font-weight: 500;
+      font-size: 42px;
+      line-height: 1.1;
+      letter-spacing: -0.03em;
+      color: var(--strong);
+    }
+
+    h2 {
+      margin: 36px 0 12px;
+      font-family: var(--serif);
+      font-weight: 500;
+      font-size: 26px;
+      line-height: 1.15;
+      letter-spacing: -0.02em;
+      color: var(--strong);
+    }
+
+    .lede {
+      margin: 14px 0 0;
+      max-width: 68ch;
+      color: var(--muted);
+    }
+
+    .ids {
+      margin: 4px 0 0;
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--muted);
+      word-break: break-all;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: baseline;
+      gap: 8px;
+      margin-top: 18px;
+      border-radius: 999px;
+      padding: 4px 10px 5px;
+      font-size: 12px;
+      letter-spacing: 0.06em;
+    }
+
+    .badge .code {
+      font-family: var(--mono);
+      letter-spacing: 0;
+      opacity: 0.75;
+    }
+
+    .tone-green { color: var(--green); }
+    .tone-red { color: var(--red); }
+    .tone-yellow { color: var(--yellow); }
+    .tone-blue { color: var(--blue); }
+    .badge.tone-green { background: var(--green-bg); }
+    .badge.tone-red { background: var(--red-bg); }
+    .badge.tone-yellow { background: var(--yellow-bg); }
+    .badge.tone-blue { background: var(--blue-bg); }
+
+    .facts {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 22px;
+    }
+
+    .fact {
+      min-width: 108px;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px 14px 12px;
+    }
+
+    .fact.wide { flex: 1 1 320px; }
+
+    .fact .k {
+      display: block;
+      font-family: var(--mono);
+      font-size: 11px;
+      letter-spacing: 0.04em;
+      color: var(--muted);
+    }
+
+    .fact .v {
+      display: block;
+      margin-top: 2px;
+      font-family: var(--mono);
+      font-size: 14px;
+      color: var(--strong);
+    }
+
+    .boards {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 20px 28px;
+      align-items: flex-start;
+      margin-top: 28px;
+    }
+
+    .card {
+      width: max-content;
+      max-width: 100%;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 22px 22px 18px;
+      overflow-x: auto;
+      transition: box-shadow 200ms;
+    }
+
+    .card:hover { box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04); }
+
+    .card h3 {
+      margin: 0;
+      font-family: var(--serif);
+      font-weight: 500;
+      font-size: 22px;
+      letter-spacing: -0.02em;
+      line-height: 1.1;
+    }
+
+    .card .sub {
+      margin: 6px 0 14px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    table.board {
+      border-collapse: separate;
+      border-spacing: 4px;
+      font-family: var(--mono);
+    }
+
+    .board th {
+      font-weight: 500;
+      font-size: 11px;
+      color: var(--muted);
+      text-align: center;
+    }
+
+    .board td {
+      width: var(--cell);
+      height: var(--cell);
+      min-width: var(--cell);
+      text-align: center;
+      vertical-align: middle;
+      border-radius: 4px;
+      font-size: 15px;
+      background: var(--hidden);
+      color: var(--strong);
+    }
+
+    .board td.open { background: var(--surface); box-shadow: inset 0 0 0 1px var(--line); }
+    .board td.zero { color: transparent; }
+    .board td.flag { background: var(--red-bg); color: var(--red); }
+    .board td.mine { background: var(--red-bg); color: var(--red); }
+    .board td.n1 { color: #1F6C9F; }
+    .board td.n2 { color: #346538; }
+    .board td.n3 { color: #9F2F2D; }
+    .board td.n4 { color: #3D4F8A; }
+    .board td.n5 { color: #956400; }
+    .board td.n6 { color: #2F6F6A; }
+    .board td.n7 { color: #2F3437; }
+    .board td.n8 { color: #787774; }
+    .board td.is-forced-open { box-shadow: inset 0 0 0 2px #C4B48A; }
+    .board td.is-forced-flag { box-shadow: inset 0 0 0 2px #E0B4B3; }
+    .board td.is-forced-chord { box-shadow: inset 0 0 0 2px #9BB8C9; }
+    .board td.is-forced-mixed { box-shadow: inset 0 0 0 2px #111111; }
+    .board td.is-chosen { box-shadow: inset 0 0 0 2px #111111; }
+    .board td.is-chosen.is-forced-open,
+    .board td.is-chosen.is-forced-flag,
+    .board td.is-chosen.is-forced-chord,
+    .board td.is-chosen.is-forced-mixed { box-shadow: inset 0 0 0 2px var(--green); }
+    .board td.is-changed { background: var(--blue-bg); }
+    .board td.is-changed.flag,
+    .board td.is-changed.mine { background: var(--red-bg); box-shadow: inset 0 0 0 2px var(--blue); }
+
+    .legend {
+      margin: 14px 0 0;
+      max-width: 68ch;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+
+    .chip {
+      display: inline-block;
+      border-radius: 999px;
+      padding: 4px 10px;
+      font-family: var(--mono);
+      font-size: 12px;
+      background: var(--yellow-bg);
+      color: var(--yellow);
+    }
+
+    .chip.flag { background: var(--red-bg); color: var(--red); }
+    .chip.chord { background: var(--blue-bg); color: var(--blue); }
+    .chip.match { background: var(--green-bg); color: var(--green); }
+    .chip.taken { background: var(--strong); color: #fff; }
+
+    .note {
+      margin: 16px 0 0;
+      max-width: 74ch;
+      border-radius: 8px;
+      padding: 12px 14px;
+      background: var(--red-bg);
+      color: var(--red);
+    }
+
+    .note.transport { background: var(--yellow-bg); color: var(--yellow); }
+
+    .said {
+      width: max-content;
+      max-width: 100%;
+      margin: 0 0 16px;
+      padding: 10px 14px;
+      border: 1px solid var(--line);
+      border-left: 2px solid var(--strong);
+      border-radius: 4px;
+      background: var(--surface);
+      font-family: var(--mono);
+      font-size: 14px;
+    }
+
+    .count {
+      margin: -4px 0 14px;
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 12px;
+    }
+
+    .prose {
+      max-width: 74ch;
+      white-space: pre-wrap;
+      overflow-wrap: break-word;
+      font-size: 15.5px;
+      line-height: 1.75;
+    }
+
+    .action-line {
+      font-family: var(--mono);
+      font-size: 0.92em;
+      background: var(--yellow-bg);
+      color: var(--yellow);
+      padding: 1px 4px;
+    }
+
+    .quiet { margin: 8px 0 0; color: var(--muted); }
+
+    .extras {
+      margin: 8px 0 0;
+      max-width: 74ch;
+    }
+
+    .extras div {
+      display: grid;
+      grid-template-columns: 160px minmax(0, 1fr);
+      gap: 12px;
+      padding: 8px 0;
+      border-bottom: 1px solid var(--line);
+      font-family: var(--mono);
+      font-size: 13px;
+    }
+
+    .extras dt { color: var(--muted); }
+    .extras dd { margin: 0; word-break: break-word; }
+
+    details {
+      margin-top: 40px;
+      padding-top: 8px;
+      border-top: 1px solid var(--line);
+    }
+
+    summary {
+      cursor: pointer;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    pre.raw {
+      margin: 12px 0 0;
+      max-height: 480px;
+      overflow: auto;
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--surface);
+      font-family: var(--mono);
+      font-size: 12px;
+      line-height: 1.5;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+
+    .mark {
+      display: grid;
+      grid-template-columns: repeat(3, 28px);
+      gap: 4px;
+      margin-bottom: 28px;
+    }
+
+    .mark span {
+      height: 28px;
+      border-radius: 4px;
+      background: var(--hidden);
+    }
+
+    .mark .n, .mark .z {
+      display: grid;
+      place-items: center;
+      background: var(--surface);
+      box-shadow: inset 0 0 0 1px var(--line);
+      font-family: var(--mono);
+      font-size: 13px;
+    }
+
+    .mark .a { color: var(--blue); }
+    .mark .b { color: var(--green); }
+    .mark .z { color: transparent; }
+    .mark .pick { box-shadow: inset 0 0 0 2px var(--green); }
+
+    .command {
+      display: inline-block;
+      margin-top: 8px;
+      padding: 8px 10px;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      background: var(--paper);
+      font-family: var(--mono);
+      font-size: 13px;
+    }
+
+    .drop {
+      display: none;
+      position: fixed;
+      inset: 16px;
+      z-index: 5;
+      align-items: center;
+      justify-content: center;
+      border: 1px dashed var(--strong);
+      border-radius: 12px;
+      background: rgba(247, 246, 243, 0.94);
+      pointer-events: none;
+    }
+
+    .drop p {
+      margin: 0;
+      font-family: var(--serif);
+      font-size: 40px;
+      letter-spacing: -0.03em;
+    }
+
+    body.dragging .drop { display: flex; }
+
+    .empty-files {
+      margin: 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    @media (max-width: 860px) {
+      .app {
+        height: auto;
+        overflow: visible;
+        display: block;
+      }
+
+      aside, main {
+        overflow: visible;
+        height: auto;
+      }
+
+      aside { border-right: 0; border-bottom: 1px solid var(--line); }
+      main { padding: 32px 20px 72px; }
+      h1 { font-size: 34px; }
+      .top { padding: 14px 20px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header class="top">
+      <span class="brand">msbench</span>
+      <span class="brand-mark">Logs</span>
+    </header>
+    <aside>
+      <div class="tools">
+        <button id="open" class="primary" type="button">Open file</button>
+        <button id="refresh" class="ghost" type="button" hidden>Refresh</button>
+        <input id="file" type="file" accept=".jsonl,application/jsonl,application/x-ndjson,.json,text/plain" hidden>
+      </div>
+      <p class="kicker" id="file-kicker">Files</p>
+      <div id="files"></div>
+      <p class="kicker" id="step-kicker" hidden>Records</p>
+      <p class="tally" id="tally" hidden></p>
+      <div id="steps"></div>
+      <p class="hint" id="hint" hidden>↑ ↓ moves between records</p>
+    </aside>
+    <main id="main">
+      <div id="stage"></div>
+    </main>
+  </div>
+  <div class="drop" aria-hidden="true"><p>Drop a log to read it</p></div>
+  <script>
+    "use strict";
+
+    const LABELS = {
+      supported: { name: "Supported", tone: "green" },
+      lucky: { name: "Lucky", tone: "yellow" },
+      mine: { name: "Mine", tone: "red" },
+      illegal: { name: "Illegal", tone: "red" },
+      format: { name: "Format", tone: "blue" },
+    };
+    const KINDS = { open: "Open", flag: "Flag", chord: "Chord" };
+    const TIERS = { single: "Single", subset: "Subset", enumerate: "Enumeration" };
+    const STATUSES = { playing: "Playing", won: "Won", lost: "Lost" };
+    const STOPS = {
+      cleared: "Cleared",
+      transport: "Transport",
+      step_cap: "Step cap",
+      supported: "Supported",
+      lucky: "Lucky",
+      mine: "Mine",
+      illegal: "Illegal",
+      format: "Format",
+    };
+    const MODES = { one_step: "One-step", multi_step: "Multi-step" };
+    const PROTOCOLS = { instruct: "Instruct", thinking: "Thinking" };
+    const ACTION_RE = /^ACTION: (open|flag|chord) row=([1-9][0-9]*) col=([1-9][0-9]*)$/;
+    const KNOWN = new Set([
+      "schema", "run_id", "model", "protocol", "track", "temperature",
+      "item_id", "episode_id", "fixture", "seed", "rows", "cols", "mines_total", "bbbv",
+      "position_tier", "step_index", "sample_index", "mode", "prompt_sha256",
+      "board_text", "response_text", "label", "action", "forced_tier", "forced_actions",
+      "forced_count", "forced_open_count", "hidden_count", "status_after", "text_after",
+      "stop_reason", "detail", "transport_error", "attempts",
+    ]);
+
+    const state = {
+      server: false,
+      runs: [],
+      origin: null,
+      name: null,
+      records: [],
+      index: 0,
+      entered: false,
+    };
+    let loadToken = 0;
+    let dragDepth = 0;
+
+    function el(tag, attrs = {}, children = []) {
+      const node = document.createElement(tag);
+      for (const [key, value] of Object.entries(attrs)) {
+        if (value == null || value === false) continue;
+        if (key === "class") node.className = value;
+        else if (key === "text") node.textContent = String(value);
+        else if (key.startsWith("on") && typeof value === "function") {
+          node.addEventListener(key.slice(2).toLowerCase(), value);
+        } else node.setAttribute(key, value === true ? "" : String(value));
+      }
+      for (const child of children) {
+        if (child == null || child === false) continue;
+        node.append(child instanceof Node ? child : document.createTextNode(String(child)));
+      }
+      return node;
+    }
+
+    function digits(value) {
+      if (value == null || value === "") return "—";
+      const number = Number(value);
+      if (!Number.isFinite(number)) return String(value);
+      return number.toLocaleString("en-US");
+    }
+
+    function formatBytes(size) {
+      if (size < 1024) return size + " B";
+      if (size < 1024 * 1024) return (size / 1024).toFixed(size < 10 * 1024 ? 1 : 0) + " KB";
+      return (size / 1024 / 1024).toFixed(1) + " MB";
+    }
+
+    function formatLatency(ms) {
+      if (ms == null || !Number.isFinite(Number(ms))) return "—";
+      if (ms < 1000) return Math.round(ms) + " ms";
+      return (ms / 1000).toFixed(1) + " s";
+    }
+
+    function plural(count, one, many) {
+      return digits(count) + " " + (Number(count) === 1 ? one : many);
+    }
+
+    function presentName(name) {
+      const match = String(name).match(
+        /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z-([0-9a-f]+)-(one_step|multi_step)\.jsonl$/
+      );
+      if (!match) return { title: name, mode: "" };
+      return {
+        title: `${match[1]}-${match[2]}-${match[3]} ${match[4]}:${match[5]} UTC`,
+        mode: `${MODES[match[8]] || match[8]} · ${match[7].slice(0, 8)}`,
+      };
+    }
+
+    function labelInfo(record) {
+      if (record._error) return { name: "Bad line", tone: "red", code: "json" };
+      if (record.transport_error && !record.label) return { name: "Transport", tone: "yellow", code: "transport" };
+      const known = LABELS[record.label];
+      if (known) return { name: known.name, tone: known.tone, code: record.label };
+      if (record.label) return { name: String(record.label), tone: "blue", code: String(record.label) };
+      return { name: "No label", tone: "yellow", code: "" };
+    }
+
+    function kindName(kind) {
+      return KINDS[kind] || kind || "Move";
+    }
+
+    function sameAction(left, right) {
+      if (!left || !right || !left.at || !right.at) return false;
+      return left.kind === right.kind
+        && Number(left.at.row) === Number(right.at.row)
+        && Number(left.at.col) === Number(right.at.col);
+    }
+
+    function cellKey(row, col) {
+      return row + "," + col;
+    }
+
+    function parseJsonl(text) {
+      const records = [];
+      const lines = String(text).split(/\r?\n/);
+      for (let index = 0; index < lines.length; index += 1) {
+        const line = lines[index];
+        if (!line.trim()) continue;
+        try {
+          const record = JSON.parse(line);
+          if (!record || typeof record !== "object" || Array.isArray(record)) {
+            records.push({ _error: "This line is not an object", _line: index + 1 });
+          } else {
+            records.push(record);
+          }
+        } catch (error) {
+          records.push({ _error: "This line is not JSON", _line: index + 1, _detail: String(error.message || error) });
+        }
+      }
+      return records;
+    }
+
+    function parseBoard(text) {
+      if (!text) return null;
+      const lines = String(text).split(/\r?\n/);
+      const meta = {};
+      let start = -1;
+      for (let index = 0; index < lines.length; index += 1) {
+        if (lines[index] === "board:") {
+          start = index;
+          break;
+        }
+        const match = lines[index].match(/^([a-z_]+):\s*(.*)$/);
+        if (match) meta[match[1]] = match[2];
+      }
+      if (start < 0) return null;
+      const grid = [];
+      for (let index = start + 1; index < lines.length; index += 1) {
+        const match = lines[index].match(/^R(\d+)\s+(.*)$/);
+        if (!match) continue;
+        grid.push({ row: Number(match[1]), cells: Array.from(match[2]) });
+      }
+      if (!grid.length) return null;
+      return {
+        status: meta.status || "",
+        mines: meta.mines_total || "",
+        flags: meta.flags_left || "",
+        cols: Number(meta.cols) || Math.max(...grid.map((row) => row.cells.length)),
+        grid,
+      };
+    }
+
+    function forcedMap(actions) {
+      const map = new Map();
+      for (const action of actions || []) {
+        if (!action || !action.at) continue;
+        const key = cellKey(action.at.row, action.at.col);
+        const previous = map.get(key);
+        map.set(key, previous && previous !== action.kind ? "mixed" : action.kind);
+      }
+      return map;
+    }
+
+    function diffCells(before, after) {
+      const changed = new Set();
+      if (!before || !after) return changed;
+      const rows = new Map();
+      for (const row of before.grid) rows.set(row.row, { before: row.cells, after: null });
+      for (const row of after.grid) {
+        const entry = rows.get(row.row) || { before: [], after: null };
+        entry.after = row.cells;
+        rows.set(row.row, entry);
+      }
+      for (const [row, entry] of rows) {
+        const left = entry.before || [];
+        const right = entry.after || [];
+        const width = Math.max(left.length, right.length);
+        for (let index = 0; index < width; index += 1) {
+          if (left[index] !== right[index]) changed.add(cellKey(row, index + 1));
+        }
+      }
+      return changed;
+    }
+
+    function findActionLines(text) {
+      return String(text || "").split(/\r?\n/).map((line) => line.trim()).filter((line) => ACTION_RE.test(line));
+    }
+
+    function splitResponse(text) {
+      const lines = String(text || "").replace(/\r\n/g, "\n").split("\n");
+      let lead = null;
+      let started = false;
+      const body = [];
+      for (const line of lines) {
+        if (!started && !line.trim()) continue;
+        if (!started && ACTION_RE.test(line.trim())) {
+          lead = line.trim();
+          started = true;
+          continue;
+        }
+        started = true;
+        body.push(line);
+      }
+      while (body.length && body[0] === "") body.shift();
+      while (body.length && body[body.length - 1] === "") body.pop();
+      return { lead, body: body.join("\n") };
+    }
+
+    function lastAttempt(record) {
+      const attempts = Array.isArray(record.attempts) ? record.attempts : [];
+      return attempts.length ? attempts[attempts.length - 1] : null;
+    }
+
+    function cellSize(cols) {
+      const wide = window.innerWidth > 860;
+      const available = window.innerWidth - (wide ? 112 : 40) - 44 - 22 - 4 * (cols + 1);
+      const fit = Math.floor(available / cols);
+      const preferred = cols <= 4 ? 48 : cols <= 9 ? 36 : 30;
+      return Math.max(24, Math.min(preferred, fit));
+    }
+
+    function glyphClass(glyph) {
+      if (glyph === "#") return "hidden";
+      if (glyph === "F") return "flag";
+      if (glyph === "*") return "mine";
+      if (glyph === ".") return "open zero";
+      if (/^[1-8]$/.test(glyph)) return "open n" + glyph;
+      return "open";
+    }
+
+    function glyphText(glyph) {
+      if (glyph === "#" || glyph === ".") return "";
+      return glyph;
+    }
+
+    function glyphWord(glyph) {
+      if (glyph === "#") return "Hidden";
+      if (glyph === "F") return "Flag";
+      if (glyph === ".") return "Open zero";
+      if (glyph === "*") return "Mine";
+      if (/^[1-8]$/.test(glyph)) return "Count " + glyph;
+      return glyph || "Empty";
+    }
+
+    function onBoard(board, action) {
+      if (!board || !action || !action.at) return false;
+      const row = board.grid.find((item) => item.row === Number(action.at.row));
+      const col = Number(action.at.col);
+      return Boolean(row) && col >= 1 && col <= row.cells.length;
+    }
+
+    function headline(record) {
+      const action = record.action;
+      if (!action || !action.at) return "No action";
+      return `${kindName(action.kind)} row ${action.at.row}, col ${action.at.col}`;
+    }
+
+    function statusWord(value) {
+      if (!value) return "";
+      return STATUSES[value] || String(value);
+    }
+
+    function boardCard(board, caption, marks) {
+      const card = el("section", { class: "card" });
+      card.append(el("h3", { text: caption }));
+      const bits = [];
+      if (board.status) bits.push(statusWord(board.status));
+      if (board.mines !== "") bits.push(board.mines + (Number(board.mines) === 1 ? " mine" : " mines"));
+      if (board.flags !== "") bits.push(board.flags + (Number(board.flags) === 1 ? " flag left" : " flags left"));
+      card.append(el("p", { class: "sub", text: bits.join(" · ") || "Board" }));
+      const cols = board.cols || Math.max(...board.grid.map((row) => row.cells.length));
+      const size = cellSize(cols);
+      const table = el("table", { class: "board" });
+      table.style.setProperty("--cell", size + "px");
+      const head = el("tr", {}, [el("th", { text: "" })]);
+      for (let col = 1; col <= cols; col += 1) head.append(el("th", { text: String(col), scope: "col" }));
+      table.append(el("thead", {}, [head]));
+      const body = el("tbody");
+      for (const row of board.grid) {
+        const tr = el("tr");
+        tr.append(el("th", { text: String(row.row), scope: "row" }));
+        for (let index = 0; index < row.cells.length; index += 1) {
+          const col = index + 1;
+          const glyph = row.cells[index];
+          const key = cellKey(row.row, col);
+          const forced = marks.forced ? marks.forced.get(key) : null;
+          const chosen = marks.chosen === key;
+          const changed = marks.changed ? marks.changed.has(key) : false;
+          const classes = [glyphClass(glyph)];
+          if (forced) classes.push("is-forced-" + forced);
+          if (chosen) classes.push("is-chosen");
+          if (changed) classes.push("is-changed");
+          const notes = [];
+          if (chosen) notes.push("This move");
+          if (forced) notes.push(forced === "mixed" ? "Forced mixed" : "Forced " + kindName(forced));
+          if (changed) notes.push("Changed");
+          const label = `row ${row.row} col ${col} ${glyphWord(glyph)}${notes.length ? ", " + notes.join(", ") : ""}`;
+          tr.append(el("td", {
+            class: classes.join(" "),
+            text: glyphText(glyph),
+            title: label,
+            "aria-label": label,
+          }));
+        }
+        body.append(tr);
+      }
+      table.append(body);
+      card.append(table);
+      return card;
+    }
+
+    function fact(kicker, value, wide) {
+      return el("div", { class: wide ? "fact wide" : "fact" }, [
+        el("span", { class: "k", text: kicker }),
+        el("span", { class: "v", text: value }),
+      ]);
+    }
+
+    function badge(info) {
+      const node = el("span", { class: "badge tone-" + info.tone }, [el("span", { text: info.name })]);
+      if (info.code && info.name.toLowerCase() !== String(info.code).toLowerCase()) {
+        node.append(el("span", { class: "code", text: info.code }));
+      }
+      return node;
+    }
+
+    function buildFacts(record) {
+      const wrap = el("div", { class: "facts" });
+      const tier = record.position_tier || record.forced_tier;
+      if (tier) wrap.append(fact("Tier", TIERS[tier] || String(tier)));
+      if (record.hidden_count != null) wrap.append(fact("Hidden", digits(record.hidden_count)));
+      if (record.forced_count != null) wrap.append(fact("Forced", digits(record.forced_count)));
+      if (record.forced_open_count != null) wrap.append(fact("Forced opens", digits(record.forced_open_count)));
+      if (record.status_after) wrap.append(fact("After", statusWord(record.status_after)));
+      if (record.stop_reason) {
+        wrap.append(fact("Stop", STOPS[record.stop_reason] || record.stop_reason));
+      }
+      const attempt = lastAttempt(record);
+      if (attempt) {
+        wrap.append(fact(
+          "input / output / reasoning / total",
+          [attempt.input_tokens, attempt.output_tokens, attempt.reasoning_tokens, attempt.total_tokens].map(digits).join(" / "),
+          true
+        ));
+        const bits = [];
+        if (attempt.finish_reason) bits.push(attempt.finish_reason);
+        if (attempt.latency_ms != null) bits.push(formatLatency(attempt.latency_ms));
+        if (attempt.http_status != null) bits.push("HTTP " + attempt.http_status);
+        if (bits.length) wrap.append(fact("This request", bits.join(" · ")));
+      }
+      return wrap;
+    }
+
+    function buildBoards(record) {
+      const before = parseBoard(record.board_text);
+      const after = parseBoard(record.text_after);
+      const wrap = el("div", { class: "boards" });
+      if (!before && !after) {
+        wrap.append(el("p", { class: "quiet", text: "This record has no board text." }));
+        return wrap;
+      }
+      const forced = forcedMap(record.forced_actions);
+      const chosen = record.action && record.action.at
+        ? cellKey(record.action.at.row, record.action.at.col)
+        : null;
+      if (before) wrap.append(boardCard(before, "Before", { forced, chosen }));
+      if (after) wrap.append(boardCard(after, "After this move", { changed: diffCells(before, after) }));
+      else wrap.append(el("section", { class: "card" }, [
+        el("h3", { text: "After this move" }),
+        el("p", { class: "sub", text: "No board after this move." }),
+      ]));
+      return wrap;
+    }
+
+    function buildForced(record) {
+      const section = el("section");
+      section.append(el("h2", { text: "Forced set" }));
+      const actions = Array.isArray(record.forced_actions) ? record.forced_actions : [];
+      const tier = record.forced_tier;
+      const bits = [];
+      bits.push(plural(actions.length, "move", "moves"));
+      if (tier) bits.push(TIERS[tier] || String(tier));
+      section.append(el("p", { class: "quiet", text: bits.join(" · ") }));
+      if (!actions.length && !record.action) {
+        section.append(el("p", { text: "This position has no forced move." }));
+        return section;
+      }
+      const chips = el("div", { class: "chips" });
+      if (record.action && record.action.at) {
+        const matched = actions.some((item) => sameAction(item, record.action));
+        chips.append(el("span", {
+          class: "chip " + (matched ? "match" : "taken"),
+          text: `This move ${kindName(record.action.kind)} ${record.action.at.row},${record.action.at.col}`,
+        }));
+      }
+      for (const action of actions) {
+        if (!action || !action.at || sameAction(action, record.action)) continue;
+        chips.append(el("span", {
+          class: "chip " + (action.kind || ""),
+          text: `${kindName(action.kind)} ${action.at.row},${action.at.col}`,
+        }));
+      }
+      section.append(chips);
+      const before = parseBoard(record.board_text);
+      if (record.action && before && !onBoard(before, record.action)) {
+        section.append(el("p", { class: "note", text: "That coordinate is not on the board." }));
+      }
+      return section;
+    }
+
+    function buildAttempts(record) {
+      const attempts = Array.isArray(record.attempts) ? record.attempts : [];
+      if (attempts.length < 2) return null;
+      const section = el("section");
+      section.append(el("h2", { text: "Requests" }));
+      attempts.forEach((attempt, index) => {
+        section.append(el("p", { class: "quiet", text: "Attempt " + (index + 1) }));
+        const wrap = el("div", { class: "facts" });
+        wrap.append(fact("HTTP", attempt.http_status == null ? "—" : String(attempt.http_status)));
+        wrap.append(fact("Latency", formatLatency(attempt.latency_ms)));
+        wrap.append(fact("finish", attempt.finish_reason || "—"));
+        wrap.append(fact(
+          "tokens",
+          [attempt.input_tokens, attempt.output_tokens, attempt.reasoning_tokens, attempt.total_tokens].map(digits).join(" / ")
+        ));
+        section.append(wrap);
+        if (attempt.error) section.append(el("p", { class: "note transport", text: String(attempt.error) }));
+      });
+      return section;
+    }
+
+    function buildProse(record) {
+      const section = el("section");
+      const text = record.response_text || "";
+      section.append(el("h2", { text: "Model text" }));
+      section.append(el("p", { class: "count", text: plural(Array.from(text).length, "character", "characters") }));
+      const found = findActionLines(text);
+      if (record.label === "format") {
+        section.append(el("p", {
+          class: "quiet",
+          text: found.length === 1
+            ? "The reply has one ACTION line, and the record is still labeled format."
+            : `The reply has ${found.length} ACTION lines. Exactly one is required.`,
+        }));
+      }
+      const split = splitResponse(text);
+      if (split.lead) section.append(el("p", { class: "said", text: split.lead }));
+      if (!split.body) {
+        if (!split.lead) section.append(el("p", { text: "This record has no reply text." }));
+        return section;
+      }
+      const block = el("div", { class: "prose" });
+      const lines = split.body.split("\n");
+      lines.forEach((line, index) => {
+        if (index) block.append(document.createTextNode("\n"));
+        if (ACTION_RE.test(line.trim())) block.append(el("span", { class: "action-line", text: line }));
+        else block.append(document.createTextNode(line));
+      });
+      section.append(block);
+      return section;
+    }
+
+    function buildExtras(record) {
+      const entries = Object.entries(record).filter(([key]) => !KNOWN.has(key) && !key.startsWith("_"));
+      if (!entries.length) return null;
+      const section = el("section");
+      section.append(el("h2", { text: "Other fields" }));
+      const list = el("dl", { class: "extras" });
+      for (const [key, value] of entries) {
+        const shown = value != null && typeof value === "object" ? JSON.stringify(value) : String(value);
+        list.append(el("div", {}, [el("dt", { text: key }), el("dd", { text: shown })]));
+      }
+      section.append(list);
+      return section;
+    }
+
+    function lede(record) {
+      const parts = [];
+      if (record.fixture) parts.push(String(record.fixture));
+      if (record.seed != null) parts.push("seed " + record.seed);
+      if (record.rows && record.cols) parts.push(record.rows + "×" + record.cols);
+      if (record.mines_total != null) parts.push(plural(record.mines_total, "mine", "mines"));
+      if (record.bbbv != null) parts.push("3BV " + record.bbbv);
+      if (record.protocol) parts.push(PROTOCOLS[record.protocol] || record.protocol);
+      if (record.temperature != null) parts.push("temperature " + record.temperature);
+      if (record.track) parts.push("track " + record.track);
+      if (record.mode) parts.push(MODES[record.mode] || record.mode);
+      if (record.prompt_sha256) parts.push("prompt " + String(record.prompt_sha256).slice(0, 12));
+      return parts.join(" · ");
+    }
+
+    function buildRecord(record, enter) {
+      if (record._error) {
+        return el("article", { class: enter ? "record enter" : "record" }, [
+          el("p", { class: "kicker", text: "Line " + record._line }),
+          el("h1", { text: record._error }),
+          record._detail ? el("p", { class: "note", text: record._detail }) : null,
+        ]);
+      }
+      const info = labelInfo(record);
+      const article = el("article", { class: enter ? "record enter" : "record" });
+      const kickerBits = [];
+      if (record.model) kickerBits.push(record.model);
+      if (record.step_index != null) kickerBits.push("step " + record.step_index);
+      if (state.records.some((item) => Number(item.sample_index) > 0)) {
+        kickerBits.push("sample " + (Number(record.sample_index) || 0));
+      }
+      article.append(el("p", { class: "kicker", text: kickerBits.join(" · ") || "Record" }));
+      article.append(el("h1", { text: headline(record) }));
+      article.append(badge(info));
+      const intro = lede(record);
+      if (intro) article.append(el("p", { class: "lede", text: intro }));
+      if (record.item_id) article.append(el("p", { class: "ids", text: "Item " + record.item_id }));
+      if (record.episode_id && record.episode_id !== record.item_id) {
+        article.append(el("p", { class: "ids", text: "Episode " + record.episode_id }));
+      }
+      if (record.transport_error) article.append(el("p", { class: "note transport", text: String(record.transport_error) }));
+      if (record.detail) article.append(el("p", { class: "note", text: String(record.detail) }));
+      const attempt = lastAttempt(record);
+      if (attempt && attempt.error && !record.transport_error) {
+        article.append(el("p", { class: "note transport", text: String(attempt.error) }));
+      }
+      article.append(buildFacts(record));
+      article.append(buildBoards(record));
+      article.append(el("p", {
+        class: "legend",
+        text: "On the board before the move, yellow is a forced open, red is a forced flag, and blue-gray is a forced chord. Green is this move when it is forced. Black is this move. On the board after the move, blue marks cells that changed.",
+      }));
+      article.append(buildForced(record));
+      const attempts = buildAttempts(record);
+      if (attempts) article.append(attempts);
+      article.append(buildProse(record));
+      const extras = buildExtras(record);
+      if (extras) article.append(extras);
+      const raw = el("details", {}, [
+        el("summary", { text: "Raw JSON" }),
+        el("pre", { class: "raw", text: JSON.stringify(record, null, 2) }),
+      ]);
+      article.append(raw);
+      return article;
+    }
+
+    function emptyStage() {
+      const article = el("article", { class: "record enter" });
+      article.append(el("div", { class: "mark", "aria-hidden": "true" }, [
+        el("span"),
+        el("span", { class: "n a", text: "1" }),
+        el("span", { class: "n z", text: "." }),
+        el("span"),
+        el("span", { class: "n b", text: "2" }),
+        el("span", { class: "n a", text: "1" }),
+        el("span", { class: "pick" }),
+        el("span"),
+        el("span"),
+      ]));
+      if (!state.server) {
+        article.append(el("h1", { text: "Drop a log" }));
+        article.append(el("p", { class: "lede", text: "This page is not attached to the runs directory. Drop a .jsonl file here, or choose Open file. To list the directory, run this from the repository root:" }));
+        article.append(el("p", { class: "command", text: "uv run --directory harness python ../viewer/serve.py" }));
+        return article;
+      }
+      if (!state.runs.length) {
+        article.append(el("h1", { text: "No logs in runs/ yet" }));
+        article.append(el("p", { class: "lede", text: "A .jsonl from one-step or multi-step will show up on the left." }));
+        return article;
+      }
+      article.append(el("h1", { text: "Choose a log" }));
+      article.append(el("p", { class: "lede", text: "The list on the left is the JSONL in runs/. Each record shows the board, the action, the label, and the model text." }));
+      return article;
+    }
+
+    function renderFiles() {
+      const host = document.querySelector("#files");
+      host.replaceChildren();
+      document.querySelector("#refresh").hidden = !state.server;
+      if (state.origin === "local" && state.name) {
+        const presented = presentName(state.name);
+        host.append(el("button", {
+          class: "file",
+          type: "button",
+          "aria-current": "true",
+          title: state.name,
+        }, [
+          el("span", { class: "title", text: presented.title }),
+          el("span", { class: "meta", text: (presented.mode ? presented.mode + " · " : "") + "Opened in this window" }),
+        ]));
+      }
+      if (!state.server && state.origin !== "local") {
+        host.append(el("p", { class: "empty-files", text: "Not connected to runs/. Drop a file or use Open file." }));
+        return;
+      }
+      if (state.server && !state.runs.length && state.origin !== "local") {
+        host.append(el("p", { class: "empty-files", text: "The directory is empty." }));
+      }
+      for (const run of state.runs) {
+        const presented = presentName(run.name);
+        const current = state.origin === "server" && state.name === run.name;
+        const meta = [presented.mode, plural(run.records, "record", "records"), formatBytes(run.bytes)].filter(Boolean).join(" · ");
+        host.append(el("button", {
+          class: "file",
+          type: "button",
+          "aria-current": current ? "true" : null,
+          title: run.name,
+          onclick: () => loadServerFile(run.name),
+        }, [
+          el("span", { class: "title", text: presented.title }),
+          el("span", { class: "meta", text: meta }),
+        ]));
+      }
+    }
+
+    function stepActionText(record) {
+      if (record._error) return "Line " + record._line;
+      if (record.action && record.action.at) {
+        const text = `${kindName(record.action.kind)} ${record.action.at.row},${record.action.at.col}`;
+        if (record.stop_reason) {
+          const word = STOPS[record.stop_reason] || record.stop_reason;
+          return text + " · " + word;
+        }
+        return text;
+      }
+      if (record.stop_reason) return STOPS[record.stop_reason] || String(record.stop_reason);
+      return "No action";
+    }
+
+    function renderSteps() {
+      const host = document.querySelector("#steps");
+      const kicker = document.querySelector("#step-kicker");
+      const tally = document.querySelector("#tally");
+      const hint = document.querySelector("#hint");
+      host.replaceChildren();
+      if (!state.records.length) {
+        kicker.hidden = true;
+        tally.hidden = true;
+        hint.hidden = true;
+        return;
+      }
+      kicker.hidden = false;
+      hint.hidden = state.records.length < 2;
+      const counts = new Map();
+      state.records.forEach((record) => {
+        const name = labelInfo(record).name;
+        counts.set(name, (counts.get(name) || 0) + 1);
+      });
+      if (state.records.length > 1) {
+        tally.hidden = false;
+        tally.textContent = plural(state.records.length, "record", "records") + " · " + [...counts].map(([name, count]) => name + " " + count).join(" · ");
+      } else {
+        tally.hidden = true;
+      }
+      let previousEpisode = null;
+      const several = new Set(state.records.map((record) => record.episode_id).filter(Boolean)).size > 1;
+      state.records.forEach((record, index) => {
+        if (several && record.episode_id !== previousEpisode) {
+          previousEpisode = record.episode_id;
+          host.append(el("p", { class: "episode", text: record.episode_id || "No episode id" }));
+        }
+        const info = labelInfo(record);
+        const button = el("button", {
+          class: "step",
+          type: "button",
+          "aria-current": index === state.index ? "true" : null,
+          onclick: () => selectRecord(index),
+        }, [
+          el("span", { class: "idx", text: String(index + 1).padStart(2, "0") }),
+          el("span", { class: "name tone-" + info.tone, text: info.name }),
+          el("span", { class: "act", text: stepActionText(record) }),
+        ]);
+        host.append(button);
+      });
+      const current = host.querySelector('[aria-current="true"]');
+      if (current) current.scrollIntoView({ block: "nearest" });
+    }
+
+    function renderRecord() {
+      const stage = document.querySelector("#stage");
+      if (!state.records.length) {
+        stage.replaceChildren(emptyStage());
+        document.title = "Logs";
+        return;
+      }
+      const record = state.records[state.index];
+      const enter = !state.entered;
+      state.entered = true;
+      stage.replaceChildren(buildRecord(record, enter));
+      const presented = presentName(state.name || "");
+      document.title = (presented.title || state.name || "Logs") + " · Logs";
+      document.querySelector("main").scrollTop = 0;
+    }
+
+    function selectRecord(index) {
+      if (index < 0 || index >= state.records.length || index === state.index) return;
+      state.index = index;
+      renderSteps();
+      renderRecord();
+    }
+
+    function showText(origin, name, text) {
+      state.origin = origin;
+      state.name = name;
+      state.records = parseJsonl(text);
+      state.index = 0;
+      state.entered = false;
+      renderFiles();
+      renderSteps();
+      renderRecord();
+    }
+
+    async function loadServerFile(name) {
+      const token = ++loadToken;
+      state.origin = "server";
+      state.name = name;
+      renderFiles();
+      document.querySelector("#stage").replaceChildren(el("article", { class: "record" }, [
+        el("p", { class: "kicker", text: "Loading" }),
+        el("h1", { text: presentName(name).title }),
+      ]));
+      let response;
+      try {
+        response = await fetch("/api/runs/" + encodeURIComponent(name), { cache: "no-store" });
+      } catch (error) {
+        if (token !== loadToken) return;
+        document.querySelector("#stage").replaceChildren(el("article", { class: "record" }, [
+          el("h1", { text: "Could not read this file" }),
+          el("p", { class: "note", text: String(error.message || error) }),
+        ]));
+        return;
+      }
+      if (token !== loadToken) return;
+      if (!response.ok) {
+        state.records = [];
+        renderSteps();
+        document.querySelector("#stage").replaceChildren(el("article", { class: "record" }, [
+          el("h1", { text: "Could not read this file" }),
+          el("p", { class: "lede", text: name }),
+        ]));
+        return;
+      }
+      const text = await response.text();
+      if (token !== loadToken) return;
+      history.replaceState(null, "", "#" + encodeURIComponent(name));
+      showText("server", name, text);
+    }
+
+    function readLocal(file) {
+      const token = ++loadToken;
+      const reader = new FileReader();
+      reader.onload = () => {
+        if (token !== loadToken) return;
+        history.replaceState(null, "", location.pathname);
+        showText("local", file.name, String(reader.result || ""));
+      };
+      reader.onerror = () => {
+        if (token !== loadToken) return;
+        document.querySelector("#stage").replaceChildren(el("article", { class: "record" }, [
+          el("h1", { text: "Could not read this file" }),
+          el("p", { class: "lede", text: file.name }),
+        ]));
+      };
+      reader.readAsText(file, "utf-8");
+    }
+
+    async function refreshRuns() {
+      if (!state.server) return;
+      const response = await fetch("/api/runs", { cache: "no-store" });
+      if (!response.ok) return;
+      state.runs = await response.json();
+      renderFiles();
+      if (state.origin === "server" && state.name && state.runs.some((run) => run.name === state.name)) {
+        await loadServerFile(state.name);
+      }
+    }
+
+    function move(delta) {
+      selectRecord(state.index + delta);
+    }
+
+    document.querySelector("#open").addEventListener("click", () => {
+      document.querySelector("#file").click();
+    });
+    document.querySelector("#file").addEventListener("change", (event) => {
+      const file = event.target.files && event.target.files[0];
+      if (file) readLocal(file);
+      event.target.value = "";
+    });
+    document.querySelector("#refresh").addEventListener("click", () => {
+      refreshRuns().catch((error) => {
+        document.querySelector("#stage").replaceChildren(el("article", { class: "record" }, [
+          el("h1", { text: "Refresh failed" }),
+          el("p", { class: "note", text: String(error.message || error) }),
+        ]));
+      });
+    });
+
+    window.addEventListener("keydown", (event) => {
+      if (event.altKey || event.ctrlKey || event.metaKey) return;
+      const target = event.target;
+      if (target && target.closest && target.closest("input, textarea, select")) return;
+      if (event.key !== "ArrowDown" && event.key !== "ArrowUp" && event.key !== "j" && event.key !== "k") return;
+      const selection = window.getSelection();
+      if (selection && !selection.isCollapsed && document.querySelector(".prose") && document.querySelector(".prose").contains(selection.anchorNode)) {
+        return;
+      }
+      if (!state.records.length) return;
+      event.preventDefault();
+      move(event.key === "ArrowDown" || event.key === "j" ? 1 : -1);
+    });
+
+    window.addEventListener("hashchange", () => {
+      const name = decodeURIComponent(location.hash.replace(/^#/, ""));
+      if (!name || (state.origin === "server" && state.name === name)) return;
+      if (state.runs.some((run) => run.name === name)) loadServerFile(name);
+    });
+
+    window.addEventListener("dragenter", (event) => {
+      if (!event.dataTransfer || ![...event.dataTransfer.types].includes("Files")) return;
+      dragDepth += 1;
+      document.body.classList.add("dragging");
+    });
+    window.addEventListener("dragleave", () => {
+      dragDepth = Math.max(0, dragDepth - 1);
+      if (!dragDepth) document.body.classList.remove("dragging");
+    });
+    window.addEventListener("dragover", (event) => event.preventDefault());
+    window.addEventListener("drop", (event) => {
+      event.preventDefault();
+      dragDepth = 0;
+      document.body.classList.remove("dragging");
+      const file = event.dataTransfer && event.dataTransfer.files && event.dataTransfer.files[0];
+      if (file) readLocal(file);
+    });
+
+    async function init() {
+      try {
+        const response = await fetch("/api/runs", { cache: "no-store" });
+        if (!response.ok) throw new Error(String(response.status));
+        state.runs = await response.json();
+        state.server = true;
+      } catch {
+        state.server = false;
+      }
+      renderFiles();
+      const hash = decodeURIComponent(location.hash.replace(/^#/, ""));
+      if (state.server && hash && state.runs.some((run) => run.name === hash)) {
+        await loadServerFile(hash);
+        return;
+      }
+      if (state.server && state.runs.length) {
+        await loadServerFile(state.runs[0].name);
+        return;
+      }
+      renderSteps();
+      renderRecord();
+    }
+
+    init();
+  </script>
+</body>
+</html>
