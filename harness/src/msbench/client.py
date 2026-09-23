@@ -13,7 +13,7 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
 
-TOKEN_FIELDS = ("max_tokens", "max_completion_tokens")
+USER_AGENT = "msbench/0.1.0"
 
 
 class FatalApiError(RuntimeError):
@@ -49,28 +49,25 @@ def complete_chat(
     base: str,
     key: str,
     model: str,
-    max_tokens: int = 512,
     temperature: float = 0,
     max_retries: int = 2,
     timeout: float = 120,
-    token_field: str = "max_tokens",
     post=None,
     sleep=None,
 ) -> Completion:
-    if token_field not in TOKEN_FIELDS:
-        raise ValueError(f"token_field must be one of {TOKEN_FIELDS}")
     sender = urllib_post if post is None else post
     pause = time.sleep if sleep is None else sleep
     url = chat_url(base)
     headers = {
         "Authorization": f"Bearer {key}",
         "Content-Type": "application/json",
+        "User-Agent": USER_AGENT,
     }
+    # This gateway counts reasoning against max_tokens, so the request leaves it unset.
     body = {
         "model": model,
         "temperature": temperature,
         "messages": [{"role": "user", "content": prompt}],
-        token_field: max_tokens,
     }
     attempts: list[dict] = []
     last_error = "transport"
@@ -103,7 +100,7 @@ def complete_chat(
             )
             last_error = message
             continue
-        text, finish_reason, input_tokens, output_tokens, reasoning_tokens = parsed
+        text, finish_reason, input_tokens, output_tokens, reasoning_tokens, total_tokens = parsed
         attempts.append(
             _attempt(
                 index,
@@ -113,6 +110,7 @@ def complete_chat(
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
                 reasoning_tokens=reasoning_tokens,
+                total_tokens=total_tokens,
             )
         )
         return Completion(text=text, attempts=attempts, transport_error=None)
@@ -129,7 +127,9 @@ def urllib_post(url: str, headers: dict, body: dict, timeout: float) -> tuple[in
         return error.code, error.read().decode("utf-8", "replace")
 
 
-def _parse_success(raw: str) -> tuple[str, str | None, int | None, int | None, int | None] | None:
+def _parse_success(
+    raw: str,
+) -> tuple[str, str | None, int | None, int | None, int | None, int | None] | None:
     if not raw:
         return None
     try:
@@ -150,8 +150,8 @@ def _parse_success(raw: str) -> tuple[str, str | None, int | None, int | None, i
     finish_reason = choices[0].get("finish_reason")
     if finish_reason is not None and not isinstance(finish_reason, str):
         finish_reason = str(finish_reason)
-    input_tokens, output_tokens, reasoning_tokens = usage_tokens(payload)
-    return text, finish_reason, input_tokens, output_tokens, reasoning_tokens
+    input_tokens, output_tokens, reasoning_tokens, total_tokens = usage_tokens(payload)
+    return text, finish_reason, input_tokens, output_tokens, reasoning_tokens, total_tokens
 
 
 def join_message(message: dict) -> str | None:
@@ -182,19 +182,20 @@ def as_text(value) -> str | None:
     return None
 
 
-def usage_tokens(payload: dict) -> tuple[int | None, int | None, int | None]:
+def usage_tokens(payload: dict) -> tuple[int | None, int | None, int | None, int | None]:
     usage = payload.get("usage")
     if not isinstance(usage, dict):
-        return None, None, None
+        return None, None, None, None
     details = usage.get("completion_tokens_details")
     reasoning = None
     if isinstance(details, dict) and "reasoning_tokens" in details:
         reasoning = _optional_int(details.get("reasoning_tokens"))
-    return (
-        _optional_int(usage.get("prompt_tokens")),
-        _optional_int(usage.get("completion_tokens")),
-        reasoning,
-    )
+    prompt = _optional_int(usage.get("prompt_tokens"))
+    completion = _optional_int(usage.get("completion_tokens"))
+    total = _optional_int(usage.get("total_tokens"))
+    if total is None and prompt is not None and completion is not None:
+        total = prompt + completion
+    return prompt, completion, reasoning, total
 
 
 def _optional_int(value):
@@ -212,6 +213,7 @@ def _attempt(
     input_tokens: int | None = None,
     output_tokens: int | None = None,
     reasoning_tokens: int | None = None,
+    total_tokens: int | None = None,
     error: str | None = None,
 ) -> dict:
     return {
@@ -222,6 +224,7 @@ def _attempt(
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
         "reasoning_tokens": reasoning_tokens,
+        "total_tokens": total_tokens,
         "error": error,
     }
 

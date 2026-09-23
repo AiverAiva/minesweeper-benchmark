@@ -110,6 +110,9 @@ def test_tokens_use_accepted_attempts_and_latency_uses_every_request():
     assert requests["output"]["sum"] == pytest.approx(39)
     assert requests["reasoning"]["n"] == 1
     assert requests["reasoning"]["sum"] == pytest.approx(4)
+    assert requests["total"]["n"] == 8
+    assert requests["total"]["sum"] == pytest.approx(217)
+    assert requests["total"]["median"] == pytest.approx(20.5)
     assert requests["latency"]["n"] == 6
     assert requests["latency"]["median"] == pytest.approx(60)
     assert requests["latency"]["p90"] == pytest.approx(95)
@@ -193,3 +196,4 @@ def test_summary_text_names_the_classes():
     assert "平均前綴 1.000" in text
     assert "初級平均前綴 2.000" in text
     assert "機會基線" in text
+    assert "總使用量 總和 217" in text

@@ -10,8 +10,6 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from msbench.client import TOKEN_FIELDS
-
 
 class ConfigError(RuntimeError):
     pass
@@ -22,11 +20,9 @@ class Settings:
     base: str
     model: str
     protocol: str
-    max_tokens: int
     temperature: float
     max_retries: int
     samples: int
-    token_field: str
     timeout: float
     track: str
     binary: str | None
@@ -85,20 +81,14 @@ def load_settings(args) -> Settings:
     load_dotenv()
     temperature = _float(args, "temperature", "MS_TEMPERATURE", 0.0)
     samples = _int(args, "samples", "MS_SAMPLES", 1)
-    token_field = _text(args, "token_field", "MS_TOKEN_FIELD", "max_tokens")
-    if token_field not in TOKEN_FIELDS:
-        raise ConfigError("MS_TOKEN_FIELD 只能是 max_tokens 或 max_completion_tokens。")
     if temperature < 0:
         raise ConfigError("temperature 需要大於或等於 0。")
     if samples < 1:
         raise ConfigError("samples 需要至少 1。")
     if temperature == 0 and samples != 1:
         raise ConfigError("temperature 0 每個位置只抽一次。要重複抽樣就調高 MS_TEMPERATURE。")
-    max_tokens = _int(args, "max_tokens", "MS_MAX_TOKENS", 512)
     max_retries = _int(args, "max_retries", "MS_MAX_RETRIES", 2)
     timeout = _float(args, "timeout", "MS_TIMEOUT", 120.0)
-    if max_tokens < 1:
-        raise ConfigError("max_tokens 需要至少 1。")
     if max_retries < 0:
         raise ConfigError("max_retries 需要大於或等於 0。")
     if timeout <= 0:
@@ -108,11 +98,9 @@ def load_settings(args) -> Settings:
         base=base.rstrip("/"),
         model=_text(args, "model", "MS_MODEL", ""),
         protocol=_text(args, "protocol", "MS_PROTOCOL", "instruct"),
-        max_tokens=max_tokens,
         temperature=temperature,
         max_retries=max_retries,
         samples=samples,
-        token_field=token_field,
         timeout=timeout,
         track=_text(args, "track", "MS_TRACK", "adhoc"),
         binary=_optional_text(args, "binary", "MSENGINE"),

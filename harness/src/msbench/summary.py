@@ -144,6 +144,7 @@ def _requests(records: list[dict]) -> dict:
     inputs = _numbers(body, "input_tokens")
     outputs = _numbers(body, "output_tokens")
     reasoning = _numbers(body, "reasoning_tokens")
+    totals = _totals(body)
     latencies = [
         attempt["latency_ms"]
         for attempt in attempts
@@ -161,6 +162,7 @@ def _requests(records: list[dict]) -> dict:
         "input": _spread(inputs),
         "output": _spread(outputs),
         "reasoning": _spread(reasoning),
+        "total": _spread(totals),
         "latency": {
             "n": len(latencies),
             "median": percentile(latencies, 0.5) if latencies else None,
@@ -177,17 +179,16 @@ def _requests(records: list[dict]) -> dict:
 def _episode_costs(records: list[dict]) -> dict:
     totals = []
     for _key, steps in _episodes(records):
-        total = 0
+        total = 0.0
         known = False
         for step in steps:
-            attempt = _last(step)
-            for key in ("input_tokens", "output_tokens"):
-                value = attempt.get(key)
-                if isinstance(value, (int, float)):
-                    total += value
-                    known = True
+            value = _billed(_last(step))
+            if value is None:
+                continue
+            total += value
+            known = True
         if known:
-            totals.append(float(total))
+            totals.append(total)
     return {
         "n": len(totals),
         "sum": sum(totals) if totals else None,
@@ -289,6 +290,30 @@ def _rates(counts: dict[str, int], total: int) -> dict[str, float | None]:
     if total == 0:
         return {label: None for label in LABELS}
     return {label: counts[label] / total for label in LABELS}
+
+
+def _billed(attempt: dict) -> float | None:
+    """Tokens the provider billed for one call.
+
+    reasoning_tokens is already inside completion_tokens, so it is not added again.
+    """
+    value = attempt.get("total_tokens")
+    if isinstance(value, (int, float)):
+        return float(value)
+    prompt = attempt.get("input_tokens")
+    completion = attempt.get("output_tokens")
+    if isinstance(prompt, (int, float)) and isinstance(completion, (int, float)):
+        return float(prompt) + float(completion)
+    return None
+
+
+def _totals(records: list[dict]) -> list[float]:
+    values = []
+    for record in records:
+        value = _billed(_last(record))
+        if value is not None:
+            values.append(value)
+    return values
 
 
 def _numbers(records: list[dict], key: str) -> list[float]:
@@ -415,6 +440,7 @@ def _render_requests(block: dict) -> list[str]:
     lines.append(f"  input tokens {_spread_text(block['input'])}")
     lines.append(f"  output tokens {_spread_text(block['output'])}")
     lines.append(f"  reasoning tokens {_spread_text(block['reasoning'])}")
+    lines.append(f"  總使用量 {_spread_text(block['total'])}")
     latency = block["latency"]
     lines.append(
         f"  延遲毫秒 中位數 {_num(latency['median'])}  P90 {_num(latency['p90'])}  n={latency['n']}"

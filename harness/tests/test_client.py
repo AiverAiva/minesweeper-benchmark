@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from msbench.client import FatalApiError, complete_chat
+from msbench.client import USER_AGENT, FatalApiError, complete_chat
 from msbench.config import ConfigError, api_key, load_settings
 from msbench.parse import parse_action
 
@@ -14,11 +14,9 @@ def _settings(**overrides):
         "base": None,
         "model": None,
         "protocol": None,
-        "max_tokens": None,
         "temperature": None,
         "max_retries": None,
         "samples": None,
-        "token_field": None,
         "timeout": None,
         "track": None,
         "binary": None,
@@ -33,11 +31,9 @@ def _clear_env(monkeypatch):
         "MS_API_KEY",
         "MS_MODEL",
         "MS_PROTOCOL",
-        "MS_MAX_TOKENS",
         "MS_TEMPERATURE",
         "MS_MAX_RETRIES",
         "MS_SAMPLES",
-        "MS_TOKEN_FIELD",
         "MS_TIMEOUT",
         "MS_TRACK",
         "MSENGINE",
@@ -119,9 +115,11 @@ def test_client_errors_are_not_retried(status):
         calls["n"] += 1
         assert url == "https://example.com/v1/chat/completions"
         assert headers["Authorization"] == "Bearer sk-test"
+        assert headers["User-Agent"] == USER_AGENT
         assert "tools" not in body
         assert body["messages"] == [{"role": "user", "content": "board"}]
-        assert body["max_tokens"] == 512
+        assert "max_tokens" not in body
+        assert "max_completion_tokens" not in body
         return status, "nope"
 
     with pytest.raises(FatalApiError):
@@ -160,6 +158,7 @@ def test_server_error_is_retried_then_scored():
     assert result.transport_error is None
     assert result.text == "ACTION: open row=1 col=1"
     assert result.attempts[1]["reasoning_tokens"] == 2
+    assert result.attempts[1]["total_tokens"] == 7
     assert result.attempts[0]["http_status"] == 500
     assert "sk-super-secret" not in json.dumps(result.attempts)
 
@@ -200,25 +199,30 @@ def test_completion_url_is_not_doubled():
     assert seen["url"] == "https://example.com/v1/chat/completions"
 
 
-def test_token_field_switch_sends_only_one_limit():
-    seen = {}
+def test_provider_total_is_kept_and_reasoning_is_not_added_again():
+    payload = {
+        "choices": [{"message": {"content": "ACTION: open row=1 col=1"}, "finish_reason": "stop"}],
+        "usage": {
+            "prompt_tokens": 10,
+            "completion_tokens": 6,
+            "total_tokens": 16,
+            "completion_tokens_details": {"reasoning_tokens": 4},
+        },
+    }
 
     def post(url, headers, body, timeout):
-        seen["body"] = body
-        return 200, _ok()
+        return 200, json.dumps(payload)
 
-    complete_chat(
+    result = complete_chat(
         prompt="board",
         base="https://example.com/v1",
         key="sk-test",
         model="m",
-        max_tokens=32,
-        token_field="max_completion_tokens",
         post=post,
         sleep=lambda _seconds: None,
     )
-    assert seen["body"]["max_completion_tokens"] == 32
-    assert "max_tokens" not in seen["body"]
+    assert result.attempts[0]["total_tokens"] == 16
+    assert result.attempts[0]["reasoning_tokens"] == 4
 
 
 def test_a_body_without_an_action_is_returned_once():

@@ -24,8 +24,6 @@ class RunMeta:
     track: str
     samples: int = 1
     temperature: float = 0
-    max_tokens: int = 512
-    token_field: str = "max_tokens"
 
 
 def new_run_id() -> str:
@@ -41,8 +39,6 @@ def meta_from_settings(settings: Settings, run_id: str | None = None) -> RunMeta
         track=settings.track,
         samples=settings.samples,
         temperature=settings.temperature,
-        max_tokens=settings.max_tokens,
-        token_field=settings.token_field,
     )
 
 
@@ -239,8 +235,6 @@ def ask(
         "protocol": meta.protocol,
         "track": meta.track,
         "temperature": meta.temperature,
-        "max_tokens": meta.max_tokens,
-        "token_field": meta.token_field,
         "item_id": item_id,
         "episode_id": episode_id,
         "fixture": fixture_name,
@@ -310,11 +304,9 @@ def _http_complete(settings: Settings, key: str):
             base=settings.base,
             key=key,
             model=settings.model,
-            max_tokens=settings.max_tokens,
             temperature=settings.temperature,
             max_retries=settings.max_retries,
             timeout=settings.timeout,
-            token_field=settings.token_field,
         )
 
     return complete
