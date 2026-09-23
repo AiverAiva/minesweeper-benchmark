@@ -71,7 +71,7 @@ uv run --project harness msbench summary runs/<run>.jsonl
 
 `one-step` asks once at every position along `gold`. Each item reloads the fixture and replays the gold prefix up to that position. `multi-step` keeps one engine session from the opening until the first action that is not forced, or until the board is won. Each model call is a new request containing the fixed prompt and the current board. Earlier replies are not sent back.
 
-Logs are written to `runs/{run_id}-{mode}.jsonl`. `summary` prints a Traditional Chinese report. Passing exactly two logs also prints a paired bootstrap of the second file minus the first.
+Logs are written to `runs/{run_id}-{mode}.jsonl`. Records stream to the file as each move is scored, so a run can be watched or resumed from a partial log. `summary` prints a Traditional Chinese report. Passing exactly two logs also prints a paired bootstrap of the second file minus the first.
 
 ## Read a log
 

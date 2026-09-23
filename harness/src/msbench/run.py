@@ -6,6 +6,7 @@ import json
 import sys
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -46,13 +47,6 @@ def load_fixture(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def write_jsonl(path: Path, records: list[dict]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8", newline="\n") as handle:
-        for record in records:
-            handle.write(json.dumps(record, ensure_ascii=False) + "\n")
-
-
 def default_log_path(mode: str, run_id: str) -> Path:
     return repo_root() / "runs" / f"{run_id}-{mode}.jsonl"
 
@@ -83,7 +77,17 @@ def run_paths(
     meta = meta_from_settings(settings)
     destination = out or default_log_path(mode, meta.run_id)
     records: list[dict] = []
+    handle = None
     failed = False
+
+    def emit(record: dict) -> None:
+        nonlocal handle
+        if handle is None:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            handle = destination.open("w", encoding="utf-8", newline="\n")
+        handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+        handle.flush()
+
     try:
         with EngineSession(settings.binary) as session:
             for path in paths:
@@ -97,16 +101,17 @@ def run_paths(
                         meta,
                         complete,
                         step_cap=step_cap,
+                        on_record=emit,
                     )
                 )
     except Exception:
         failed = True
         raise
     finally:
-        if records:
-            write_jsonl(destination, records)
-            if failed:
-                print(f"已寫入未完成的紀錄 {destination}", file=sys.stderr)
+        if handle is not None:
+            handle.close()
+        if failed and records:
+            print(f"已寫入未完成的紀錄 {destination}", file=sys.stderr)
     return records, destination
 
 
@@ -119,19 +124,22 @@ def run_fixture(
     complete,
     *,
     step_cap: int | None = None,
+    on_record: Callable[[dict], None] | None = None,
 ) -> list[dict]:
     if mode == "one_step":
-        return run_one_step(session, fixture, fixture_name, meta, complete)
+        return run_one_step(session, fixture, fixture_name, meta, complete, on_record=on_record)
     if mode == "multi_step":
         if meta.samples != 1:
             raise ConfigError("多步目前每個局面只走一次。MS_SAMPLES 請維持 1。")
         return run_multi_step(
-            session, fixture, fixture_name, meta, complete, step_cap=step_cap
+            session, fixture, fixture_name, meta, complete, step_cap=step_cap, on_record=on_record
         )
     raise ConfigError(f"未知模式 {mode}")
 
 
-def run_one_step(session, fixture, fixture_name, meta: RunMeta, complete) -> list[dict]:
+def run_one_step(
+    session, fixture, fixture_name, meta: RunMeta, complete, *, on_record: Callable[[dict], None] | None = None
+) -> list[dict]:
     gold = fixture.get("gold") or []
     if not gold:
         raise GoldError("fixture 沒有 gold 步，無法切一步快照")
@@ -158,6 +166,8 @@ def run_one_step(session, fixture, fixture_name, meta: RunMeta, complete) -> lis
                     position_tier=step.get("tier"),
                 )
             )
+            if on_record is not None:
+                on_record(records[-1])
     return records
 
 
@@ -169,6 +179,7 @@ def run_multi_step(
     complete,
     *,
     step_cap: int | None = None,
+    on_record: Callable[[dict], None] | None = None,
 ) -> list[dict]:
     board_text, status = load_position(session, fixture, [])
     if status != "playing":
@@ -194,20 +205,24 @@ def run_multi_step(
         records.append(record)
         if record.get("transport_error"):
             record["stop_reason"] = "transport"
-            return records
-        if record.get("label") != "supported":
+        elif record.get("label") != "supported":
             record["stop_reason"] = record.get("label")
-            return records
-        status = record.get("status_after")
-        board_text = record.get("text_after") or ""
-        if status == "won":
-            record["stop_reason"] = "cleared"
-            return records
-        if status != "playing":
-            record["stop_reason"] = record.get("label")
-            return records
-    if records and records[-1].get("stop_reason") is None:
-        records[-1]["stop_reason"] = "step_cap"
+        else:
+            status = record.get("status_after")
+            board_text = record.get("text_after") or ""
+            if status == "won":
+                record["stop_reason"] = "cleared"
+            elif status != "playing":
+                record["stop_reason"] = record.get("label")
+            elif len(records) >= cap:
+                record["stop_reason"] = "step_cap"
+            else:
+                if on_record is not None:
+                    on_record(record)
+                continue
+        if on_record is not None:
+            on_record(record)
+        return records
     return records
 
 
