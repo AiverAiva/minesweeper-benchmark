@@ -6,8 +6,9 @@
 //! version, matching `ms_toollib`'s local frontier solvers.
 //!
 //! Tiers are tried shallow-first: single cell, subset, then exact enumeration.
-//! A frontier block larger than [`MAX_ENUM_CELLS`] is rejected instead of
-//! treated as a guess.
+//! A single-cell conclusion is written back and the same rule runs again, so a
+//! cell reached by repeating that rule stays in the single tier. A frontier
+//! block larger than [`MAX_ENUM_CELLS`] is rejected instead of treated as a guess.
 
 use std::collections::BTreeSet;
 use std::fmt;
@@ -130,16 +131,50 @@ fn deduce(
 }
 
 fn run_direct(board: &Vec<Vec<i32>>) -> Result<(BTreeSet<CellPos>, BTreeSet<CellPos>), ForceError> {
+    let mut marked = board.clone();
+    let mut safe = BTreeSet::new();
+    let mut mines = BTreeSet::new();
+    loop {
+        let (found_safe, found_mines) = direct_pass(&marked)?;
+        let mut advanced = false;
+        for cell in found_safe {
+            if safe.insert(cell) {
+                write_mark(&mut marked, cell, 12);
+                advanced = true;
+            }
+        }
+        for cell in found_mines {
+            if mines.insert(cell) {
+                write_mark(&mut marked, cell, 11);
+                advanced = true;
+            }
+        }
+        if !advanced {
+            break;
+        }
+    }
+    Ok((safe, mines))
+}
+
+fn direct_pass(
+    board: &Vec<Vec<i32>>,
+) -> Result<(BTreeSet<CellPos>, BTreeSet<CellPos>), ForceError> {
     let (mut coefficients, mut variables, mut constants, _, _) = ms_toollib::refresh_matrixs(board);
-    let mut marked = board.to_vec();
+    let mut working = board.to_vec();
     let found = ms_toollib::solve_direct(
         &mut coefficients,
         &mut variables,
         &mut constants,
-        &mut marked,
+        &mut working,
     )
     .map_err(|_| ForceError::Inconsistent)?;
     Ok(split_cells(found))
+}
+
+fn write_mark(board: &mut Vec<Vec<i32>>, cell: CellPos, value: i32) {
+    let row = (cell.row - 1) as usize;
+    let col = (cell.col - 1) as usize;
+    board[row][col] = value;
 }
 
 fn run_subset(board: &Vec<Vec<i32>>) -> Result<(BTreeSet<CellPos>, BTreeSet<CellPos>), ForceError> {
@@ -296,6 +331,46 @@ mod tests {
         game.apply(Action::flag(2, 1)).unwrap();
         let forced = forced(game.player()).unwrap();
         assert!(forced.actions.contains(&Action::open(3, 1)));
+    }
+
+    #[test]
+    fn repeated_single_cell_steps_stay_in_the_single_tier() {
+        // One pass proves (9,5) safe and (8,7) a mine. Substituting those
+        // conclusions makes (9,6) a mine and (9,7) safe, still by one equation.
+        let board = visible_board(&[
+            "##2111#2#",
+            "222#11121",
+            "..111....",
+            ".........",
+            ".........",
+            ".......11",
+            ".....123#",
+            ".11112###",
+            ".1#1#####",
+        ]);
+        let judged = forced(&board).unwrap();
+        assert_eq!(judged.tier, Some(Tier::Single));
+        assert!(judged.actions.contains(&Action::open(9, 5)));
+        assert!(judged.actions.contains(&Action::flag(8, 7)));
+        assert!(judged.actions.contains(&Action::flag(9, 6)));
+        assert!(judged.actions.contains(&Action::open(9, 7)));
+    }
+
+    fn visible_board(rows: &[&str]) -> PlayerBoard {
+        let cells = rows
+            .iter()
+            .map(|row| {
+                row.chars()
+                    .map(|glyph| match glyph {
+                        '#' => Visible::Hidden,
+                        '.' => Visible::Number(0),
+                        '1'..='8' => Visible::Number(glyph.to_digit(10).unwrap() as u8),
+                        other => panic!("bad glyph {other}"),
+                    })
+                    .collect()
+            })
+            .collect();
+        PlayerBoard::from_visible(cells)
     }
 
     #[test]
