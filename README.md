@@ -8,7 +8,7 @@ Every model replays the same frozen boards. The hidden mine map stays in the fix
 
 | Path | Role |
 | --- | --- |
-| `engine/` | Boards, no-guess generation, the three-tier oracle, and the `msengine` binary |
+| `engine/` | Boards, no-guess generation, the tiered oracle, and the `msengine` binary |
 | `harness/` | The `msbench` uv project (Python 3.13) |
 | `viewer/` | A local page for `runs/*.jsonl` |
 | `runs/` | Generated boards and JSONL logs (gitignored) |
@@ -134,7 +134,7 @@ A response that has a body receives exactly one of five labels. A forced move sc
 | 4 | Mine | The action applies and the game is lost. |
 | 5 | Lucky | The action applies and the game stays in progress, or is won, but the cell was not safe in every consistent layout. |
 
-A cell is forced when every mine layout consistent with the visible numbers agrees on it: safe in all of them, or a mine in all of them. Player flags are marks and are removed before the solver runs. The mine total is stored on the board and is not a constraint. Single-cell conclusions are written back and the same rule runs until it adds nothing; that closure stays in the single tier. Subset reasoning is used only when the single-cell closure is empty, and enumeration only after that. A frontier block wider than 55 cells discards the board.
+A cell is forced when every mine layout consistent with the visible numbers agrees on it: safe in all of them, or a mine in all of them. Player flags are marks and are removed before the solver runs. The mine total completes the local answer: when every mine is already proven, all remaining hidden cells are safe; when the hidden cells exactly fill the quota, they are all mines. Single-cell conclusions are written back and the same rule runs until it adds nothing; that closure stays in the single tier. Subset reasoning is used only when the single-cell closure is empty, enumeration only after that, and the mine-count completion runs on top of whatever the local tiers found. Only a position with no local deduction at all is labeled with the global tier. A frontier block wider than 55 cells discards the board.
 
 The reasoning rate is supported / (supported + lucky + mine). Format and illegal counts are reported beside it. Multi-step also reports the clear rate and the prefix, the number of leading supported steps. The episode stops at the first label other than supported. A timeout, HTTP 429, HTTP 5xx, or a response with no body is a transport failure. Transport failures stay outside the five labels, and a multi-step episode that fails this way is left out of the clear rate and the prefix mean.
 

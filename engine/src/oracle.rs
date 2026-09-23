@@ -1,14 +1,22 @@
-//! Frontier oracle.
+//! Frontier oracle with a mine-count completion.
 //!
 //! A cell is forced when every mine layout consistent with the opened numbers
 //! agrees on it. Player flags are marks, not constraints: they are removed
-//! before the solver runs. The total mine count is not a constraint in this
-//! version, matching `ms_toollib`'s local frontier solvers.
+//! before the solver runs, so both hidden and flagged cells count as unknown.
+//! Opened cells are safe, so every mine is still unknown and there are exactly
+//! `mines_total` of them. The local tiers (`ms_toollib` frontier solvers)
+//! never use that total; the global tier does, and only it does.
 //!
 //! Tiers are tried shallow-first: single cell, subset, then exact enumeration.
 //! A single-cell conclusion is written back and the same rule runs again, so a
-//! cell reached by repeating that rule stays in the single tier. A frontier
-//! block larger than [`MAX_ENUM_CELLS`] is rejected instead of treated as a guess.
+//! cell reached by repeating that rule stays in the single tier. The global
+//! completion runs on top of whatever the local tiers found: when every mine
+//! is already proven the rest unknown is safe (G1), and when the unknown cells
+//! exactly fill the quota the hidden ones are mines (G2). A position with a
+//! local deduction keeps its local tier; only a position with no local
+//! deduction at all is labeled with the global tier. The completion only adds
+//! cells, so every judgment made without it stays valid.
+//! A frontier block larger than [`MAX_ENUM_CELLS`] is rejected instead of treated as a guess.
 
 use std::collections::BTreeSet;
 use std::fmt;
@@ -23,13 +31,14 @@ pub const ORACLE_VERSION: &str = "1.0.0";
 pub const MAX_ENUM_CELLS: usize = 55;
 
 /// Shallowest deduction that still forces a cell.
-/// Declaration order is depth order: single < subset < enumerate.
+/// Declaration order is depth order: single < subset < enumerate < global.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Tier {
     Single,
     Subset,
     Enumerate,
+    Global,
 }
 
 impl Tier {
@@ -38,6 +47,7 @@ impl Tier {
             Tier::Single => "single",
             Tier::Subset => "subset",
             Tier::Enumerate => "enumerate",
+            Tier::Global => "global",
         }
     }
 }
@@ -109,10 +119,12 @@ fn deduce(
     let board = solver_board(player);
     let (safe, mines) = run_direct(&board)?;
     if !safe.is_empty() || !mines.is_empty() {
+        let (safe, mines) = extend_global(player, safe, mines);
         return Ok((safe, mines, Tier::Single));
     }
     let (safe, mines) = run_subset(&board)?;
     if !safe.is_empty() || !mines.is_empty() {
+        let (safe, mines) = extend_global(player, safe, mines);
         return Ok((safe, mines, Tier::Subset));
     }
     let (_coefficients, variables, _constants, _inside, _flagged) =
@@ -127,7 +139,62 @@ fn deduce(
         &variables,
         &constants,
     ));
+    if !safe.is_empty() || !mines.is_empty() {
+        let (safe, mines) = extend_global(player, safe, mines);
+        return Ok((safe, mines, Tier::Enumerate));
+    }
+    let (safe, mines) = extend_global(player, safe, mines);
+    if !safe.is_empty() || !mines.is_empty() {
+        return Ok((safe, mines, Tier::Global));
+    }
     Ok((safe, mines, Tier::Enumerate))
+}
+
+/// Mine-count completion over the local answer.
+///
+/// Opened cells are safe, so the `mines_total` mines are all inside the
+/// unknown (hidden or flagged) cells. Two sound rules, one pass, no feedback
+/// into the local tiers:
+/// G1: every mine already proven, so the rest unknown is safe.
+/// G2: unknown cells exactly fill the quota, so each of them is a mine.
+/// Only adds cells; positions judged without it keep the same tier.
+fn extend_global(
+    player: &PlayerBoard,
+    mut safe: BTreeSet<CellPos>,
+    mut mines: BTreeSet<CellPos>,
+) -> (BTreeSet<CellPos>, BTreeSet<CellPos>) {
+    let total = player.mines_total() as usize;
+    if total == 0 {
+        return (safe, mines);
+    }
+    let unknown = unknown_cells(player);
+    if mines.len() == total {
+        for cell in unknown {
+            if !mines.contains(&cell) {
+                safe.insert(cell);
+            }
+        }
+        return (safe, mines);
+    }
+    if unknown.len() == total {
+        mines.extend(unknown);
+    }
+    (safe, mines)
+}
+
+fn unknown_cells(player: &PlayerBoard) -> BTreeSet<CellPos> {
+    let mut cells = BTreeSet::new();
+    for row in 1..=player.rows() {
+        for col in 1..=player.cols() {
+            if matches!(
+                player.get(row, col).expect("in range"),
+                Visible::Hidden | Visible::Flag
+            ) {
+                cells.insert(CellPos::new(row, col));
+            }
+        }
+    }
+    cells
 }
 
 fn run_direct(board: &Vec<Vec<i32>>) -> Result<(BTreeSet<CellPos>, BTreeSet<CellPos>), ForceError> {
@@ -313,6 +380,30 @@ mod tests {
         assert!(forced.actions.is_empty());
         assert_eq!(forced.tier, None);
         assert_eq!(game.player().status(), Status::Playing);
+    }
+
+    #[test]
+    fn proven_quota_makes_distant_cells_safe() {
+        // G1: the single tier proves the only mine, so the far hidden cell is
+        // safe by count even though no number touches it.
+        let mut board = visible_board(&["#1..", "11..", "....", "...#"]);
+        board.set_mines_total(1);
+        let judged = forced(&board).unwrap();
+        assert_eq!(judged.tier, Some(Tier::Single));
+        assert!(judged.actions.contains(&Action::flag(1, 1)));
+        assert!(judged.actions.contains(&Action::open(4, 4)));
+    }
+
+    #[test]
+    fn quota_filling_unknowns_are_mines() {
+        // G2: no number constrains anything, but the two hidden cells exactly
+        // fill the quota of two.
+        let mut board = visible_board(&["##"]);
+        board.set_mines_total(2);
+        let judged = forced(&board).unwrap();
+        assert_eq!(judged.tier, Some(Tier::Global));
+        assert!(judged.actions.contains(&Action::flag(1, 1)));
+        assert!(judged.actions.contains(&Action::flag(1, 2)));
     }
 
     #[test]

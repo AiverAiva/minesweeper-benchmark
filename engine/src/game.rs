@@ -163,6 +163,12 @@ impl PlayerBoard {
             cells,
         }
     }
+
+    /// Test helper: real boards carry the true total, `from_visible` leaves 0.
+    #[cfg(test)]
+    pub(crate) fn set_mines_total(&mut self, total: u32) {
+        self.mines_total = total;
+    }
 }
 
 /// Hidden mine map. `-1` is a mine, `0` through `8` are neighbor counts.
