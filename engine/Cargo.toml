@@ -1,0 +1,21 @@
+[package]
+name = "minesweeper-engine"
+version = "0.1.0"
+edition = "2021"
+description = "Seeded no-guess minesweeper engine: hidden board, player board, and oracle."
+publish = false
+
+[[bin]]
+name = "msengine"
+path = "src/bin/msengine.rs"
+
+[dependencies]
+# Default features stay on. utils.rs imports `rand` outside a feature gate,
+# and the `rs` feature is the only switch that provides it. That feature also
+# compiles tract-onnx.
+ms_toollib = "=1.5.16"
+rand = "0.8"
+# tract-onnx pulls kstring. 2.0.3 and later require rustc 1.96.
+kstring = "=2.0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
