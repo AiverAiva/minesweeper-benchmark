@@ -79,7 +79,7 @@ Logs are written to `runs/{run_id}-{mode}.jsonl`. `summary` prints a Traditional
 uv run --project harness python viewer/serve.py
 ```
 
-This opens `http://127.0.0.1:8765/`. The server lists `runs/*.jsonl` and will not serve any other path. `--port` changes the port. `--no-browser` skips opening a window. Stop it with Ctrl+C.
+This prints `http://127.0.0.1:8765/` and waits; nothing opens on its own. Open the URL yourself, or pass `--open-browser` to launch the default browser. The server lists `runs/*.jsonl` and will not serve any other path. `--port` changes the port. Stop it with Ctrl+C.
 
 The page is in English. Each record shows the board before the move and the board after it, the scored action, the label, token counts, and the model text. Up and down arrow keys move between records. A file can also be dropped onto the page.
 

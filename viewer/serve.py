@@ -109,7 +109,7 @@ def main(argv: list[str] | None = None) -> int:
     _configure_stdio()
     parser = argparse.ArgumentParser(description="Read runs/*.jsonl in a browser.")
     parser.add_argument("--port", type=int, default=8765)
-    parser.add_argument("--no-browser", action="store_true")
+    parser.add_argument("--open-browser", action="store_true", help="open the page instead of only printing the URL")
     args = parser.parse_args(argv)
     try:
         server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
@@ -121,7 +121,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Open {url}", flush=True)
     print(f"Logs {RUNS}", flush=True)
     print("Stop with Ctrl+C", flush=True)
-    if not args.no_browser:
+    if args.open_browser:
         webbrowser.open(url)
     try:
         server.serve_forever()
