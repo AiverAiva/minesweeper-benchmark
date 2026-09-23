@@ -3,7 +3,7 @@
 Listens on 127.0.0.1 and serves only .jsonl files whose names match, inside runs/.
 From the repository root:
 
-    uv run --directory harness python ../viewer/serve.py
+    uv run --project harness python viewer/serve.py
 """
 
 from __future__ import annotations

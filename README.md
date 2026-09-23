@@ -27,8 +27,8 @@ From the repository root:
 ```sh
 cargo test
 cargo build --bin msengine
-uv --directory harness sync
-uv --directory harness run pytest
+uv --project harness sync
+uv --project harness run pytest
 ```
 
 ## Generate a board
@@ -63,10 +63,10 @@ A shell variable overrides the file. A CLI flag overrides both. Requests do not 
 
 ```sh
 cp harness/.env.example harness/.env
-uv run --directory harness msbench gold runs/beginner.json
-uv run --directory harness msbench one-step runs/beginner.json
-uv run --directory harness msbench multi-step runs/beginner.json
-uv run --directory harness msbench summary runs/<run>.jsonl
+uv run --project harness msbench gold runs/beginner.json
+uv run --project harness msbench one-step runs/beginner.json
+uv run --project harness msbench multi-step runs/beginner.json
+uv run --project harness msbench summary runs/<run>.jsonl
 ```
 
 `one-step` asks once at every position along `gold`. Each item reloads the fixture and replays the gold prefix up to that position. `multi-step` keeps one engine session from the opening until the first action that is not forced, or until the board is won. Each model call is a new request containing the fixed prompt and the current board. Earlier replies are not sent back.
@@ -76,7 +76,7 @@ Logs are written to `runs/{run_id}-{mode}.jsonl`. `summary` prints a Traditional
 ## Read a log
 
 ```sh
-uv run --directory harness python ../viewer/serve.py
+uv run --project harness python viewer/serve.py
 ```
 
 This opens `http://127.0.0.1:8765/`. The server lists `runs/*.jsonl` and will not serve any other path. `--port` changes the port. `--no-browser` skips opening a window. Stop it with Ctrl+C.

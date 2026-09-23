@@ -29,7 +29,7 @@ def main(argv: list[str] | None = None) -> int:
             "已經在環境裡的同名變數會蓋過這個檔案。\n"
             "MS_PROTOCOL 只寫進紀錄（instruct 或 thinking），預設 instruct。\n"
             "請求不送 token 上限。模型自己停，用量照回應裡的 total 記入。\n"
-            "在 harness 目錄用 uv run msbench <命令> 執行。"
+            "盤面路徑照當前目錄解析，在倉庫根目錄用 uv run --project harness msbench <命令> 執行。"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
