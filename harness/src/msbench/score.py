@@ -1,6 +1,6 @@
 """Five-way label for one model reply.
 
-Order: exactly one ACTION line, engine rejection, membership in the live forced
+Order: exactly one tool call, engine rejection, membership in the live forced
 set, then the result of applying anything else. A forced action stays supported
 even when the board ends.
 """
@@ -8,7 +8,6 @@ even when the board ends.
 from __future__ import annotations
 
 from msbench.engine import EngineError, EngineSession
-from msbench.parse import parse_action
 
 LABELS = ("supported", "lucky", "mine", "illegal", "format")
 LEGAL = ("supported", "lucky", "mine")
@@ -27,7 +26,7 @@ def hidden_count(board_text: str) -> int:
     return sum(line.count("#") for line in lines[start:])
 
 
-def classify(session: EngineSession, response_text: str, judged: dict | None = None) -> dict:
+def classify(session: EngineSession, action: dict | None, judged: dict | None = None) -> dict:
     if judged is None:
         judged = session.forced()
     actions = judged.get("actions")
@@ -44,7 +43,7 @@ def classify(session: EngineSession, response_text: str, judged: dict | None = N
         "detail": None,
         "label": "format",
     }
-    parsed = parse_action(response_text)
+    parsed = action
     if parsed is None:
         return outcome
     outcome["action"] = parsed

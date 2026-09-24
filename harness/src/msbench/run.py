@@ -265,6 +265,7 @@ def ask(
         "prompt_sha256": PROMPT_SHA256,
         "board_text": board_text,
         "response_text": completion.text,
+        "reasoning_text": completion.reasoning,
         "label": None,
         "action": None,
         "forced_tier": judged.get("tier"),
@@ -285,7 +286,7 @@ def ask(
         record["position_tier"] = record["forced_tier"]
     if completion.transport_error:
         return record
-    record.update(classify(session, completion.text, judged))
+    record.update(classify(session, completion.action, judged))
     return record
 
 

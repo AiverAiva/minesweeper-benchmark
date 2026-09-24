@@ -59,7 +59,7 @@ Copy `harness/.env.example` to `harness/.env` and set:
 - `MS_MODEL`, the model id
 - `MS_API_KEY`, kept on the machine; there is no flag for it
 
-A shell variable overrides the file. A CLI flag overrides both. Requests do not send `max_tokens`. The default temperature is 0, with one sample per position.
+A shell variable overrides the file. A CLI flag overrides both. Requests stream (`stream: true`) and do not send `max_tokens`. The default temperature is 0, with one sample per position.
 
 ```sh
 cp harness/.env.example harness/.env
@@ -112,13 +112,13 @@ Coordinates are 1-based. Row 1 is the top row and column 1 is the left column.
 | `1`–`8` | Opened count |
 | `*` | Exploded mine |
 
-A scored line matches this pattern and nothing else on that line:
+Each request sends the board with one forced tool, `minesweeper_move`. The model must call it exactly once per turn:
 
-```text
-ACTION: open|flag|chord row=<positive integer> col=<positive integer>
+```json
+{"kind": "open|flag|chord", "row": "<positive integer>", "col": "<positive integer>"}
 ```
 
-Any other text is ignored. Zero matching lines, two or more, or a broken line is a format error.
+Free text around the call is ignored. Zero calls, two or more, a wrong name, or broken arguments is a format error.
 
 A fixture is the JSON written by `msengine generate`: the mine coordinates, the player-visible text after the opening click, and `gold`. The prompt sent to the model contains the visible text only.
 
@@ -128,7 +128,7 @@ A response that has a body receives exactly one of five labels. A forced move sc
 
 | Order | Label | Meaning |
 | --- | --- | --- |
-| 1 | Format | The reply does not contain exactly one valid `ACTION` line. |
+| 1 | Format | The reply does not contain exactly one valid `minesweeper_move` call. |
 | 2 | Illegal | The engine rejects the action. The board is unchanged. |
 | 3 | Supported | The action is in the live forced set. Open, flag, and chord all count. Any forced cell counts, not only the gold cell. |
 | 4 | Mine | The action applies and the game is lost. |

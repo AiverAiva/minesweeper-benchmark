@@ -4,9 +4,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from msbench.client import USER_AGENT, FatalApiError, complete_chat
+from msbench.client import USER_AGENT, FatalApiError, complete_chat, parse_tool_call
 from msbench.config import ConfigError, api_key, load_settings
-from msbench.parse import parse_action
 
 
 def _settings(**overrides):
@@ -41,16 +40,52 @@ def _clear_env(monkeypatch):
         monkeypatch.delenv(name, raising=False)
 
 
-def _ok(content="ACTION: open row=1 col=1", reasoning=None, reasoning_tokens=None, finish="stop"):
-    message = {"content": content}
+def _call(kind="open", row=1, col=1, call_id="call_1"):
+    return {
+        "id": call_id,
+        "type": "function",
+        "function": {
+            "name": "minesweeper_move",
+            "arguments": json.dumps({"kind": kind, "row": row, "col": col}),
+        },
+    }
+
+
+def _chunk(delta=None, finish=None, usage=None):
+    choice = {}
+    if delta is not None:
+        choice["delta"] = delta
+    if finish is not None:
+        choice["finish_reason"] = finish
+    payload = {"choices": [choice]}
+    if usage is not None:
+        payload["usage"] = usage
+    return "data: " + json.dumps(payload)
+
+
+def _ok(content="noted", calls=None, reasoning=None, reasoning_tokens=None, finish="stop", split_args=False):
+    lines = []
+    if content is not None:
+        lines.append(_chunk({"content": content}))
     if reasoning is not None:
-        message["reasoning_content"] = reasoning
+        lines.append(_chunk({"reasoning_content": reasoning}))
+    for call in calls if calls is not None else [_call()]:
+        if split_args:
+            func = call["function"]
+            args = func["arguments"]
+            half = len(args) // 2
+            first = {"function": {"name": func["name"], "arguments": args[:half]}}
+            second = {"function": {"arguments": args[half:]}}
+            lines.append(_chunk({"tool_calls": [{**call, **first}]}))
+            lines.append(_chunk({"tool_calls": [{**call, **second}]}))
+        else:
+            lines.append(_chunk({"tool_calls": [call]}))
     usage = {"prompt_tokens": 3, "completion_tokens": 4}
     if reasoning_tokens is not None:
         usage["completion_tokens_details"] = {"reasoning_tokens": reasoning_tokens}
-    return json.dumps(
-        {"choices": [{"message": message, "finish_reason": finish}], "usage": usage}
-    )
+    lines.append(_chunk({}, finish=finish, usage=usage))
+    lines.append("data: [DONE]")
+    return "\n".join(lines) + "\n"
 
 
 def test_flag_overrides_env_and_the_key_stays_out_of_settings(monkeypatch):
@@ -116,7 +151,12 @@ def test_client_errors_are_not_retried(status):
         assert url == "https://example.com/v1/chat/completions"
         assert headers["Authorization"] == "Bearer sk-test"
         assert headers["User-Agent"] == USER_AGENT
-        assert "tools" not in body
+        assert body["tools"][0]["function"]["name"] == "minesweeper_move"
+        assert body["tool_choice"] == {
+            "type": "function",
+            "function": {"name": "minesweeper_move"},
+        }
+        assert body["stream"] is True
         assert body["messages"] == [{"role": "user", "content": "board"}]
         assert "max_tokens" not in body
         assert "max_completion_tokens" not in body
@@ -156,7 +196,8 @@ def test_server_error_is_retried_then_scored():
     assert calls["n"] == 2
     assert slept == [1.0]
     assert result.transport_error is None
-    assert result.text == "ACTION: open row=1 col=1"
+    assert result.text == "noted"
+    assert result.action == {"kind": "open", "at": {"row": 1, "col": 1}}
     assert result.attempts[1]["reasoning_tokens"] == 2
     assert result.attempts[1]["total_tokens"] == 7
     assert result.attempts[0]["http_status"] == 500
@@ -199,9 +240,14 @@ def test_completion_url_is_not_doubled():
     assert seen["url"] == "https://example.com/v1/chat/completions"
 
 
-def test_provider_total_is_kept_and_reasoning_is_not_added_again():
+def test_plain_json_body_still_parses_when_stream_is_ignored():
     payload = {
-        "choices": [{"message": {"content": "ACTION: open row=1 col=1"}, "finish_reason": "stop"}],
+        "choices": [
+            {
+                "message": {"content": "noted", "tool_calls": [_call(kind="flag", row=2, col=3)]},
+                "finish_reason": "stop",
+            }
+        ],
         "usage": {
             "prompt_tokens": 10,
             "completion_tokens": 6,
@@ -211,6 +257,7 @@ def test_provider_total_is_kept_and_reasoning_is_not_added_again():
     }
 
     def post(url, headers, body, timeout):
+        assert body["stream"] is True
         return 200, json.dumps(payload)
 
     result = complete_chat(
@@ -223,14 +270,49 @@ def test_provider_total_is_kept_and_reasoning_is_not_added_again():
     )
     assert result.attempts[0]["total_tokens"] == 16
     assert result.attempts[0]["reasoning_tokens"] == 4
+    assert result.action == {"kind": "flag", "at": {"row": 2, "col": 3}}
 
 
-def test_a_body_without_an_action_is_returned_once():
+def test_split_tool_arguments_reassemble():
+    def post(url, headers, body, timeout):
+        return 200, _ok(calls=[_call(kind="flag", row=2, col=3)], split_args=True)
+
+    result = complete_chat(
+        prompt="board",
+        base="https://example.com/v1",
+        key="sk-test",
+        model="m",
+        post=post,
+        sleep=lambda _seconds: None,
+    )
+    assert result.action == {"kind": "flag", "at": {"row": 2, "col": 3}}
+    assert result.transport_error is None
+
+
+def test_keepalive_comments_are_ignored():
+    body = ": keep-alive\n\n" + _ok() + ": ping\n\n"
+
+    def post(url, headers, body_, timeout):
+        return 200, body
+
+    result = complete_chat(
+        prompt="board",
+        base="https://example.com/v1",
+        key="sk-test",
+        model="m",
+        post=post,
+        sleep=lambda _seconds: None,
+    )
+    assert result.action == {"kind": "open", "at": {"row": 1, "col": 1}}
+    assert result.transport_error is None
+
+
+def test_a_body_without_a_call_is_returned_once():
     calls = {"n": 0}
 
     def post(url, headers, body, timeout):
         calls["n"] += 1
-        return 200, _ok(content="I pass", reasoning_tokens=None)
+        return 200, _ok(content="I pass", calls=[], reasoning_tokens=None)
 
     result = complete_chat(
         prompt="board",
@@ -243,12 +325,13 @@ def test_a_body_without_an_action_is_returned_once():
     assert calls["n"] == 1
     assert result.transport_error is None
     assert result.text == "I pass"
+    assert result.action is None
     assert result.attempts[0]["reasoning_tokens"] is None
 
 
-def test_reasoning_content_is_joined_and_two_actions_fail_parse():
+def test_two_calls_yield_no_action():
     def post(url, headers, body, timeout):
-        return 200, _ok(content="ACTION: open row=1 col=1", reasoning="ACTION: flag row=2 col=2")
+        return 200, _ok(calls=[_call(kind="open", row=1, col=1), _call(kind="flag", row=2, col=2, call_id="call_2")])
 
     result = complete_chat(
         prompt="board",
@@ -258,14 +341,13 @@ def test_reasoning_content_is_joined_and_two_actions_fail_parse():
         post=post,
         sleep=lambda _seconds: None,
     )
-    assert parse_action(result.text) is None
-    assert "ACTION: open row=1 col=1" in result.text
-    assert "ACTION: flag row=2 col=2" in result.text
+    assert result.action is None
+    assert result.transport_error is None
 
 
-def test_one_action_in_reasoning_content_parses():
+def test_one_call_beside_reasoning_text_parses():
     def post(url, headers, body, timeout):
-        return 200, _ok(content="working", reasoning="ACTION: open row=2 col=2")
+        return 200, _ok(content="working", calls=[_call(kind="open", row=2, col=2)], reasoning="hmm")
 
     result = complete_chat(
         prompt="board",
@@ -275,7 +357,41 @@ def test_one_action_in_reasoning_content_parses():
         post=post,
         sleep=lambda _seconds: None,
     )
-    assert parse_action(result.text) == {"kind": "open", "at": {"row": 2, "col": 2}}
+    assert result.action == {"kind": "open", "at": {"row": 2, "col": 2}}
+    assert result.text == "working"
+    assert result.reasoning == "hmm"
+
+
+def test_broken_call_arguments_yield_no_action():
+    bad = {
+        "id": "call_1",
+        "type": "function",
+        "function": {"name": "minesweeper_move", "arguments": "not json {"},
+    }
+
+    def post(url, headers, body, timeout):
+        return 200, _ok(calls=[bad])
+
+    result = complete_chat(
+        prompt="board",
+        base="https://example.com/v1",
+        key="sk-test",
+        model="m",
+        post=post,
+        sleep=lambda _seconds: None,
+    )
+    assert result.action is None
+    assert result.transport_error is None
+
+
+def test_direct_tool_call_parsing_rejects_bad_shapes():
+    good = {"tool_calls": [_call(kind="chord", row=3, col=4)]}
+    assert parse_tool_call(good) == {"kind": "chord", "at": {"row": 3, "col": 4}}
+    assert parse_tool_call({"tool_calls": []}) is None
+    assert parse_tool_call({}) is None
+    assert parse_tool_call({"tool_calls": [{"function": {"name": "other", "arguments": "{}"}}]}) is None
+    assert parse_tool_call({"tool_calls": [_call(kind="dig", row=1, col=1)]}) is None
+    assert parse_tool_call({"tool_calls": [_call(kind="open", row=0, col=1)]}) is None
 
 
 def test_error_bodies_are_truncated():

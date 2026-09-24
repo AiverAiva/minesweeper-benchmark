@@ -58,7 +58,7 @@ def test_run_writes_a_jsonl_log_without_a_key(tmp_path, engine_binary):
         mode="multi_step",
         settings=settings,
         out=out,
-        complete=lambda _prompt: scripted("ACTION: open row=3 col=1"),
+        complete=lambda _prompt: scripted({"kind": "open", "at": {"row": 3, "col": 1}}),
     )
     assert destination == out
     assert records[-1]["stop_reason"] == "cleared"

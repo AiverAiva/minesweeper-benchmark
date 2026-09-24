@@ -1,8 +1,13 @@
-"""OpenAI-compatible chat completions.
+"""OpenAI-compatible chat completions over SSE.
 
 The API key is read by the caller from MS_API_KEY and passed in. It is not
 written into attempt logs. Format failures are model output: this client does
 not retry them. Timeouts, connection errors, 429, and 5xx are retried.
+
+Requests stream (`stream: true`) so long generations keep bytes flowing and
+stay under proxy read timeouts. Chunks are reassembled into one text, one
+reasoning string, and the tool calls before scoring. A plain JSON body is
+still accepted in case a gateway ignores the stream flag.
 """
 
 from __future__ import annotations
@@ -14,6 +19,28 @@ import urllib.request
 from dataclasses import dataclass, field
 
 USER_AGENT = "msbench/0.1.0"
+
+MOVE_TOOL_NAME = "minesweeper_move"
+
+MOVE_TOOL = {
+    "type": "function",
+    "function": {
+        "name": MOVE_TOOL_NAME,
+        "description": "Play one minesweeper move. Call exactly once per turn.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "kind": {"type": "string", "enum": ["open", "flag", "chord"]},
+                "row": {"type": "integer", "minimum": 1},
+                "col": {"type": "integer", "minimum": 1},
+            },
+            "required": ["kind", "row", "col"],
+            "additionalProperties": False,
+        },
+    },
+}
+
+TOOL_CHOICE = {"type": "function", "function": {"name": MOVE_TOOL_NAME}}
 
 
 class FatalApiError(RuntimeError):
@@ -29,6 +56,8 @@ class Completion:
     text: str
     attempts: list[dict] = field(default_factory=list)
     transport_error: str | None = None
+    action: dict | None = None
+    reasoning: str = ""
 
 
 def chat_url(base: str) -> str:
@@ -64,10 +93,14 @@ def complete_chat(
         "User-Agent": USER_AGENT,
     }
     # This gateway counts reasoning against max_tokens, so the request leaves it unset.
+    # Streaming keeps bytes flowing on long generations; proxies time out idle waits.
     body = {
         "model": model,
         "temperature": temperature,
         "messages": [{"role": "user", "content": prompt}],
+        "tools": [MOVE_TOOL],
+        "tool_choice": TOOL_CHOICE,
+        "stream": True,
     }
     attempts: list[dict] = []
     last_error = "transport"
@@ -100,7 +133,7 @@ def complete_chat(
             )
             last_error = message
             continue
-        text, finish_reason, input_tokens, output_tokens, reasoning_tokens, total_tokens = parsed
+        text, reasoning, action, finish_reason, input_tokens, output_tokens, reasoning_tokens, total_tokens = parsed
         attempts.append(
             _attempt(
                 index,
@@ -113,7 +146,7 @@ def complete_chat(
                 total_tokens=total_tokens,
             )
         )
-        return Completion(text=text, attempts=attempts, transport_error=None)
+        return Completion(text=text, attempts=attempts, transport_error=None, action=action, reasoning=reasoning)
     return Completion(text="", attempts=attempts, transport_error=last_error)
 
 
@@ -129,39 +162,197 @@ def urllib_post(url: str, headers: dict, body: dict, timeout: float) -> tuple[in
 
 def _parse_success(
     raw: str,
-) -> tuple[str, str | None, int | None, int | None, int | None, int | None] | None:
+) -> tuple[str, str, dict | None, str | None, int | None, int | None, int | None, int | None] | None:
     if not raw:
         return None
     try:
         payload = json.loads(raw)
     except json.JSONDecodeError:
-        return None
-    if not isinstance(payload, dict):
-        return None
+        payload = None
+    if isinstance(payload, dict) and isinstance(payload.get("choices"), list):
+        return _parse_message_payload(payload)
+    return _parse_sse(raw)
+
+
+def _parse_message_payload(
+    payload: dict,
+) -> tuple[str, str, dict | None, str | None, int | None, int | None, int | None, int | None] | None:
     choices = payload.get("choices")
     if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
         return None
     message = choices[0].get("message")
     if not isinstance(message, dict):
         return None
-    text = join_message(message)
-    if text is None:
+    text = message_text(message)
+    reasoning = reasoning_text(message)
+    if text is None or reasoning is None:
         return None
     finish_reason = choices[0].get("finish_reason")
     if finish_reason is not None and not isinstance(finish_reason, str):
         finish_reason = str(finish_reason)
     input_tokens, output_tokens, reasoning_tokens, total_tokens = usage_tokens(payload)
-    return text, finish_reason, input_tokens, output_tokens, reasoning_tokens, total_tokens
+    return (
+        text,
+        reasoning,
+        parse_tool_call(message),
+        finish_reason,
+        input_tokens,
+        output_tokens,
+        reasoning_tokens,
+        total_tokens,
+    )
 
 
-def join_message(message: dict) -> str | None:
-    content = as_text(message.get("content"))
-    reasoning = as_text(message.get("reasoning_content"))
-    if content is None or reasoning is None:
+def _parse_sse(
+    raw: str,
+) -> tuple[str, str, dict | None, str | None, int | None, int | None, int | None, int | None] | None:
+    """Reassemble an SSE stream into one completion. Keep-alive comments are ignored."""
+    texts: list[str] = []
+    thoughts: list[str] = []
+    calls: dict[int, dict] = {}
+    finish_reason: str | None = None
+    usage: dict | None = None
+    saw_chunk = False
+    for line in raw.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith(":"):
+            continue
+        if not stripped.startswith("data:"):
+            continue
+        data = stripped[5:].strip()
+        if data == "[DONE]":
+            break
+        try:
+            payload = json.loads(data)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(payload, dict):
+            return None
+        if isinstance(payload.get("usage"), dict):
+            usage = payload["usage"]
+        choices = payload.get("choices")
+        if not isinstance(choices, list) or not choices:
+            continue
+        choice = choices[0]
+        if not isinstance(choice, dict):
+            return None
+        finished = choice.get("finish_reason")
+        if isinstance(finished, str):
+            finish_reason = finished
+        delta = choice.get("delta")
+        if delta is None:
+            continue
+        if not isinstance(delta, dict):
+            return None
+        saw_chunk = True
+        content = as_text(delta.get("content"))
+        thought = as_text(delta.get("reasoning_content"))
+        if content is None or thought is None:
+            return None
+        texts.append(content)
+        thoughts.append(thought)
+        pending = delta.get("tool_calls")
+        if pending is None:
+            continue
+        if not isinstance(pending, list):
+            return None
+        for item in pending:
+            if not isinstance(item, dict):
+                return None
+            try:
+                index = int(item.get("index", 0))
+            except (TypeError, ValueError):
+                return None
+            slot = calls.setdefault(index, {"id": None, "name": None, "args": []})
+            if isinstance(item.get("id"), str):
+                slot["id"] = slot["id"] or item["id"]
+            func = item.get("function")
+            if func is None:
+                continue
+            if not isinstance(func, dict):
+                return None
+            name = func.get("name")
+            if isinstance(name, str) and name:
+                slot["name"] = slot["name"] or name
+            args = func.get("arguments")
+            if isinstance(args, str):
+                slot["args"].append(args)
+            elif isinstance(args, dict):
+                slot["args"].append(json.dumps(args))
+            elif args is not None:
+                return None
+    if not saw_chunk and finish_reason is None and usage is None:
         return None
-    if content and reasoning:
-        return f"{content}\n{reasoning}"
-    return content or reasoning
+    message = {
+        "tool_calls": [
+            {
+                "id": slot["id"],
+                "type": "function",
+                "function": {
+                    "name": slot["name"],
+                    "arguments": "".join(slot["args"]),
+                },
+            }
+            for _, slot in sorted(calls.items())
+        ]
+    }
+    if isinstance(usage, dict):
+        input_tokens, output_tokens, reasoning_tokens, total_tokens = usage_tokens(
+            {"usage": usage}
+        )
+    else:
+        input_tokens, output_tokens, reasoning_tokens, total_tokens = None, None, None, None
+    return (
+        "".join(texts),
+        "".join(thoughts),
+        parse_tool_call(message),
+        finish_reason,
+        input_tokens,
+        output_tokens,
+        reasoning_tokens,
+        total_tokens,
+    )
+
+
+def parse_tool_call(message: dict) -> dict | None:
+    """Return the single minesweeper_move call, or None when it is not exactly one."""
+    calls = message.get("tool_calls")
+    if not isinstance(calls, list) or len(calls) != 1:
+        return None
+    call = calls[0]
+    if not isinstance(call, dict):
+        return None
+    func = call.get("function")
+    if not isinstance(func, dict) or func.get("name") != MOVE_TOOL_NAME:
+        return None
+    args = func.get("arguments")
+    if isinstance(args, str):
+        try:
+            args = json.loads(args)
+        except json.JSONDecodeError:
+            return None
+    if not isinstance(args, dict):
+        return None
+    kind = args.get("kind")
+    row = args.get("row")
+    col = args.get("col")
+    if kind not in ("open", "flag", "chord"):
+        return None
+    if isinstance(row, bool) or isinstance(col, bool):
+        return None
+    if not isinstance(row, int) or not isinstance(col, int):
+        return None
+    if row < 1 or col < 1:
+        return None
+    return {"kind": kind, "at": {"row": row, "col": col}}
+
+
+def message_text(message: dict) -> str | None:
+    return as_text(message.get("content"))
+
+
+def reasoning_text(message: dict) -> str | None:
+    return as_text(message.get("reasoning_content"))
 
 
 def as_text(value) -> str | None:

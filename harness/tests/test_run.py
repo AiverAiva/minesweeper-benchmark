@@ -1,5 +1,4 @@
 from msbench.client import Completion
-from msbench.parse import format_action
 from msbench.prompt import PREFIX
 from msbench.run import RunMeta, run_multi_step, run_one_step
 from msbench.score import LABELS
@@ -8,9 +7,10 @@ from textbook import TEXTBOOK
 META = RunMeta(run_id="test", model="scripted", protocol="instruct", track="adhoc")
 
 
-def scripted(text: str, transport: str | None = None) -> Completion:
+def scripted(action: dict | None, transport: str | None = None) -> Completion:
     return Completion(
-        text="" if transport else text,
+        text="" if transport else "noted",
+        action=None if transport else action,
         transport_error=transport,
         attempts=[
             {
@@ -33,7 +33,7 @@ def test_one_step_reloads_each_gold_position(session, five_by_five):
     def complete(prompt):
         prompts.append(prompt)
         action = five_by_five["gold"][len(prompts) - 1]["action"]
-        return scripted(format_action(action))
+        return scripted(action)
 
     records = run_one_step(session, five_by_five, "five", META, complete)
     assert len(records) == len(five_by_five["gold"])
@@ -52,7 +52,7 @@ def test_repeated_samples_reload_the_same_position(session):
         TEXTBOOK,
         "textbook",
         meta,
-        lambda _prompt: scripted("ACTION: open row=3 col=1"),
+        lambda _prompt: scripted({"kind": "open", "at": {"row": 3, "col": 1}}),
     )
     assert [record["sample_index"] for record in records] == [0, 1]
     assert {record["item_id"] for record in records} == {records[0]["item_id"]}
@@ -65,7 +65,7 @@ def test_multi_step_gold_follower_clears(session, five_by_five):
     def complete(_prompt):
         action = five_by_five["gold"][cursor["n"]]["action"]
         cursor["n"] += 1
-        return scripted(format_action(action))
+        return scripted(action)
 
     records = run_multi_step(session, five_by_five, "five", META, complete)
     assert len(records) == len(five_by_five["gold"])
@@ -81,7 +81,7 @@ def test_lucky_click_stops_with_prefix_zero(session):
         TEXTBOOK,
         "textbook",
         META,
-        lambda _prompt: scripted("ACTION: open row=2 col=1"),
+        lambda _prompt: scripted({"kind": "open", "at": {"row": 2, "col": 1}}),
     )
     assert len(records) == 1
     assert records[0]["label"] == "lucky"
@@ -94,7 +94,7 @@ def test_format_stops_without_another_request(session):
 
     def complete(_prompt):
         calls["n"] += 1
-        return scripted("I pass")
+        return scripted(None)
 
     records = run_multi_step(session, TEXTBOOK, "textbook", META, complete)
     assert calls["n"] == 1
@@ -105,7 +105,7 @@ def test_format_stops_without_another_request(session):
 
 def test_step_cap_stops_a_supported_game_that_is_still_playing(session, five_by_five):
     assert len(five_by_five["gold"]) >= 2
-    action = format_action(five_by_five["gold"][0]["action"])
+    action = five_by_five["gold"][0]["action"]
     records = run_multi_step(
         session,
         five_by_five,
@@ -126,7 +126,7 @@ def test_transport_mid_episode_stops_and_is_unlabeled(session, five_by_five):
     def complete(_prompt):
         calls["n"] += 1
         if calls["n"] == 1:
-            return scripted(format_action(five_by_five["gold"][0]["action"]))
+            return scripted(five_by_five["gold"][0]["action"])
         return scripted("", transport="timed out")
 
     records = run_multi_step(session, five_by_five, "five", META, complete)

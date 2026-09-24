@@ -457,6 +457,41 @@
       font-size: 14px;
     }
 
+    .toolcall {
+      width: max-content;
+      max-width: 100%;
+      margin: 0 0 16px;
+      padding: 10px 14px;
+      border: 1px solid var(--line);
+      border-left: 2px solid var(--blue);
+      border-radius: 4px;
+      background: var(--surface);
+      font-family: var(--mono);
+      font-size: 14px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .toolcall .tname { color: var(--strong); }
+    .toolcall .targ { color: var(--muted); }
+
+    .reasoning {
+      max-width: 74ch;
+      max-height: 480px;
+      overflow: auto;
+      padding: 12px 14px;
+      border: 1px solid var(--line);
+      border-left: 2px dashed var(--muted);
+      border-radius: 4px;
+      background: var(--paper);
+      white-space: pre-wrap;
+      overflow-wrap: break-word;
+      font-size: 14.5px;
+      line-height: 1.7;
+    }
+
     .count {
       margin: -4px 0 14px;
       color: var(--muted);
@@ -647,7 +682,7 @@
       format: { name: "Format", tone: "blue" },
     };
     const KINDS = { open: "Open", flag: "Flag", chord: "Chord" };
-    const TIERS = { single: "Single", subset: "Subset", enumerate: "Enumeration" };
+    const TIERS = { single: "Single", subset: "Subset", enumerate: "Enumeration", global: "Global" };
     const STATUSES = { playing: "Playing", won: "Won", lost: "Lost" };
     const STOPS = {
       cleared: "Cleared",
@@ -666,7 +701,7 @@
       "schema", "run_id", "model", "protocol", "track", "temperature",
       "item_id", "episode_id", "fixture", "seed", "rows", "cols", "mines_total", "bbbv",
       "position_tier", "step_index", "sample_index", "mode", "prompt_sha256",
-      "board_text", "response_text", "label", "action", "forced_tier", "forced_actions",
+      "board_text", "response_text", "reasoning_text", "label", "action", "forced_tier", "forced_actions",
       "forced_count", "forced_open_count", "hidden_count", "status_after", "text_after",
       "stop_reason", "detail", "transport_error", "attempts",
     ]);
@@ -1087,12 +1122,49 @@
       return section;
     }
 
+    function buildToolCall(record) {
+      const section = el("section");
+      section.append(el("h2", { text: "Tool call" }));
+      const action = record.action;
+      if (!action || !action.at) {
+        section.append(el("p", { class: "quiet", text: "No tool call in this reply." }));
+        if (record.label === "format") {
+          section.append(el("p", {
+            class: "quiet",
+            text: "Exactly one minesweeper_move call is required.",
+          }));
+        }
+        return section;
+      }
+      const block = el("div", { class: "toolcall" });
+      block.append(el("span", { class: "tname", text: "minesweeper_move" }));
+      block.append(el("span", { class: "chip " + (action.kind || ""), text: kindName(action.kind) }));
+      block.append(el("span", { class: "targ", text: `row ${action.at.row} · col ${action.at.col}` }));
+      section.append(block);
+      return section;
+    }
+
+    function buildReasoning(record) {
+      const text = record.reasoning_text || "";
+      if (!text) return null;
+      const section = el("section");
+      section.append(el("h2", { text: "Reasoning" }));
+      section.append(el("p", { class: "count", text: plural(Array.from(text).length, "character", "characters") }));
+      section.append(el("div", { class: "reasoning", text }));
+      return section;
+    }
+
     function buildProse(record) {
       const section = el("section");
       const text = record.response_text || "";
       section.append(el("h2", { text: "Model text" }));
       section.append(el("p", { class: "count", text: plural(Array.from(text).length, "character", "characters") }));
       const found = findActionLines(text);
+      if (!found.length) {
+        if (!text) section.append(el("p", { text: "This record has no reply text." }));
+        else section.append(el("div", { class: "prose", text }));
+        return section;
+      }
       if (record.label === "format") {
         section.append(el("p", {
           class: "quiet",
@@ -1179,6 +1251,9 @@
         article.append(el("p", { class: "note transport", text: String(attempt.error) }));
       }
       article.append(buildFacts(record));
+      if (!findActionLines(record.response_text || "").length) {
+        article.append(buildToolCall(record));
+      }
       article.append(buildBoards(record));
       article.append(el("p", {
         class: "legend",
@@ -1188,6 +1263,8 @@
       const attempts = buildAttempts(record);
       if (attempts) article.append(attempts);
       article.append(buildProse(record));
+      const reasoning = buildReasoning(record);
+      if (reasoning) article.append(reasoning);
       const extras = buildExtras(record);
       if (extras) article.append(extras);
       const raw = el("details", {}, [
