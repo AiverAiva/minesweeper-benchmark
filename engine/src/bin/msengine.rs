@@ -31,7 +31,7 @@ fn main() -> ExitCode {
 fn print_help() {
     println!(
         "\
-msengine generate [--seed N] --rows R --cols C --mines M [--attempts N] [--out file.json]
+msengine generate [--seed N] [--level beginner|intermediate|expert] [--rows R --cols C --mines M] [--attempts N] [--out file.json]
 msengine play file.json
 msengine demo
 msengine session"
@@ -104,6 +104,7 @@ struct GenerateArgs {
 
 fn parse_generate(args: &[String]) -> Result<GenerateArgs, String> {
     let mut seed = None;
+    let mut level = None;
     let mut rows = None;
     let mut cols = None;
     let mut mines = None;
@@ -117,6 +118,7 @@ fn parse_generate(args: &[String]) -> Result<GenerateArgs, String> {
             .ok_or_else(|| format!("{key} needs a value"))?;
         match key.as_str() {
             "--seed" => seed = Some(parse_u64(key, value)?),
+            "--level" => level = Some(parse_level(key, value)?),
             "--rows" => rows = Some(parse_u32(key, value)?),
             "--cols" => cols = Some(parse_u32(key, value)?),
             "--mines" => mines = Some(parse_u32(key, value)?),
@@ -127,9 +129,13 @@ fn parse_generate(args: &[String]) -> Result<GenerateArgs, String> {
         index += 2;
     }
     let seed = seed.unwrap_or_else(rand::random::<u64>);
-    let rows = rows.ok_or("--rows is required")?;
-    let cols = cols.ok_or("--cols is required")?;
-    let mines = mines.ok_or("--mines is required")?;
+    // A level fills rows/cols/mines; explicit flags win one by one.
+    let (preset_rows, preset_cols, preset_mines) = level.unwrap_or((None, None, None));
+    let rows = rows.or(preset_rows).ok_or("--rows is required (or pick a --level)")?;
+    let cols = cols.or(preset_cols).ok_or("--cols is required (or pick a --level)")?;
+    let mines = mines
+        .or(preset_mines)
+        .ok_or("--mines is required (or pick a --level)")?;
     let mut request = GenerateRequest::new(seed, rows, cols, mines);
     if let Some(attempts) = attempts {
         request = request.attempts(attempts);
@@ -137,6 +143,21 @@ fn parse_generate(args: &[String]) -> Result<GenerateArgs, String> {
         request = request.attempts(DEFAULT_ATTEMPTS);
     }
     Ok(GenerateArgs { request, out })
+}
+
+/// Modern Minesweeper presets, as (rows, cols, mines).
+fn parse_level(key: &str, value: &str) -> Result<(Option<u32>, Option<u32>, Option<u32>), String> {
+    let preset = match value.to_ascii_lowercase().as_str() {
+        "beginner" => (9, 9, 10),
+        "intermediate" => (16, 16, 40),
+        "expert" => (16, 30, 99),
+        _ => {
+            return Err(format!(
+                "{key} expects beginner, intermediate, or expert, got {value}"
+            ))
+        }
+    };
+    Ok((Some(preset.0), Some(preset.1), Some(preset.2)))
 }
 
 fn parse_u32(key: &str, value: &str) -> Result<u32, String> {
@@ -149,6 +170,40 @@ fn parse_u64(key: &str, value: &str) -> Result<u64, String> {
     value
         .parse()
         .map_err(|_| format!("{key} expects an integer, got {value}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(words: &[&str]) -> Vec<String> {
+        words.iter().map(|word| word.to_string()).collect()
+    }
+
+    #[test]
+    fn levels_map_to_modern_sizes() {
+        let beginner = parse_generate(&args(&["--level", "beginner"])).unwrap();
+        assert_eq!((beginner.request.rows, beginner.request.cols, beginner.request.mines), (9, 9, 10));
+        let intermediate = parse_generate(&args(&["--level", "intermediate"])).unwrap();
+        assert_eq!(
+            (intermediate.request.rows, intermediate.request.cols, intermediate.request.mines),
+            (16, 16, 40)
+        );
+        let expert = parse_generate(&args(&["--level", "EXPERT"])).unwrap();
+        assert_eq!((expert.request.rows, expert.request.cols, expert.request.mines), (16, 30, 99));
+    }
+
+    #[test]
+    fn explicit_flags_override_the_level_one_by_one() {
+        let parsed = parse_generate(&args(&["--level", "beginner", "--mines", "3"])).unwrap();
+        assert_eq!((parsed.request.rows, parsed.request.cols, parsed.request.mines), (9, 9, 3));
+    }
+
+    #[test]
+    fn without_level_or_sizes_it_errors() {
+        assert!(parse_generate(&args(&["--level", "easy"])).is_err());
+        assert!(parse_generate(&args(&[])).is_err());
+    }
 }
 
 fn cmd_play(args: &[String]) -> ExitCode {

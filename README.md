@@ -40,6 +40,8 @@ cargo run --bin msengine -- generate \
   --out runs/beginner.json
 ```
 
+`--level beginner|intermediate|expert` fills in the modern sizes (9×9/10, 16×16/40, 16×30/99) so the three flags can be omitted; an explicit `--rows`, `--cols`, or `--mines` still wins one by one.
+
 Mines are drawn uniformly from the cells outside the first click's neighborhood, so that click is an opening. The default click is the center cell, `((rows + 1) / 2, (cols + 1) / 2)`. Generation tries up to 5000 layouts. A board is kept only when every later position still has a forced open. `gold` is one such path: open only, no flags, and at each step the forced open with the lowest coordinate.
 
 ```sh
