@@ -96,6 +96,13 @@ def test_multi_step_clear_rate_and_prefix_skip_transport():
     assert multi_step["transport"] == 1
     assert multi_step["clear_rate"] == pytest.approx(0.5)
     assert multi_step["prefix_mean"] == pytest.approx(1)
+    assert multi_step["counts"] == {
+        "supported": 2,
+        "lucky": 1,
+        "mine": 0,
+        "illegal": 0,
+        "format": 0,
+    }
     assert multi_step["prefix_by_band"]["beginner"] == pytest.approx(2)
     assert multi_step["prefix_by_band"]["intermediate"] == pytest.approx(0)
     assert "other" not in multi_step["prefix_by_band"]

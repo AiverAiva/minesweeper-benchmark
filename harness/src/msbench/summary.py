@@ -125,11 +125,18 @@ def _multi_step(records: list[dict], *, draws: int, seed: int) -> dict:
     bands: dict[str, list[float]] = {}
     for episode in scored:
         bands.setdefault(episode["band"], []).append(episode["prefix"])
+    labeled = [
+        record
+        for _key, steps in _episodes(records)
+        for record in steps
+        if record.get("label") in LABELS
+    ]
     return {
         "episodes": len(episodes),
         "scored": len(scored),
         "transport": len(episodes) - len(scored),
         "transport_rate": _ratio(len(episodes) - len(scored), len(episodes)),
+        "counts": _counts(labeled),
         "clear_rate": _mean(clears),
         "clear_ci": bootstrap_mean(clears, draws=draws, seed=seed),
         "prefix_mean": _mean(prefixes),
@@ -424,6 +431,9 @@ def _render_multi_step(block: dict) -> list[str]:
         lines.append("沒有多步紀錄。")
         return lines
     lines.append(f"  通關率 {_num(block['clear_rate'])}  {_ci(block['clear_ci'])}")
+    lines.append(
+        "  " + "  ".join(f"{CLASS_NAMES[label]} {block['counts'][label]}" for label in LABELS)
+    )
     lines.append(f"  平均前綴 {_num(block['prefix_mean'])}")
     for band in ("beginner", "intermediate", "other"):
         if band not in block["prefix_by_band"]:

@@ -1,4 +1,4 @@
-"""One-step snapshots along the gold path, and multi-step play until the first miss."""
+"""One-step snapshots along the gold path, and multi-step play until the game ends."""
 
 from __future__ import annotations
 
@@ -49,6 +49,12 @@ def load_fixture(path: Path) -> dict:
 
 def default_log_path(mode: str, run_id: str) -> Path:
     return repo_root() / "runs" / f"{run_id}-{mode}.jsonl"
+
+
+# Consecutive steps without board progress before a multi-step episode stops.
+# Guesses and rejected moves are recorded and play continues; only a stuck
+# board (temp 0 repeats the same reply forever) needs this backstop.
+STALL_LIMIT = 3
 
 
 def check_gold(paths: list[Path], binary: str | None = None) -> None:
@@ -187,6 +193,7 @@ def run_multi_step(
     cap = fixture["rows"] * fixture["cols"] if step_cap is None else step_cap
     episode_id = episode_identity(fixture_name, fixture)
     records = []
+    stalls = 0
     while status == "playing" and len(records) < cap:
         record = ask(
             session,
@@ -205,17 +212,26 @@ def run_multi_step(
         records.append(record)
         if record.get("transport_error"):
             record["stop_reason"] = "transport"
-        elif record.get("label") != "supported":
-            record["stop_reason"] = record.get("label")
-        else:
-            status = record.get("status_after")
-            board_text = record.get("text_after") or ""
-            if status == "won":
-                record["stop_reason"] = "cleared"
-            elif status != "playing":
-                record["stop_reason"] = record.get("label")
-            elif len(records) >= cap:
+        elif record.get("status_after") == "lost":
+            record["stop_reason"] = "mine"
+        elif record.get("status_after") == "won":
+            record["stop_reason"] = "cleared"
+        elif record.get("text_after") and record.get("text_after") != board_text:
+            status = record.get("status_after") or status
+            board_text = record.get("text_after") or board_text
+            stalls = 0
+            if len(records) >= cap:
                 record["stop_reason"] = "step_cap"
+            else:
+                if on_record is not None:
+                    on_record(record)
+                continue
+        else:
+            stalls += 1
+            if len(records) >= cap:
+                record["stop_reason"] = "step_cap"
+            elif stalls >= STALL_LIMIT:
+                record["stop_reason"] = record.get("label")
             else:
                 if on_record is not None:
                     on_record(record)

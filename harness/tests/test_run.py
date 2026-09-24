@@ -75,21 +75,53 @@ def test_multi_step_gold_follower_clears(session, five_by_five):
     assert records[0]["stop_reason"] is None
 
 
-def test_lucky_click_stops_with_prefix_zero(session):
+def test_lucky_click_continues_and_can_still_clear(session):
+    calls = {"n": 0}
+
+    def complete(_prompt):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return scripted({"kind": "open", "at": {"row": 2, "col": 1}})
+        return scripted({"kind": "open", "at": {"row": 3, "col": 1}})
+
+    records = run_multi_step(session, TEXTBOOK, "textbook", META, complete)
+    assert [record["label"] for record in records] == ["lucky", "supported"]
+    assert records[0]["stop_reason"] is None
+    assert records[0]["status_after"] == "playing"
+    assert records[-1]["stop_reason"] == "cleared"
+    assert records[-1]["status_after"] == "won"
+
+
+def test_illegal_move_continues_and_can_recover(session):
+    calls = {"n": 0}
+
+    def complete(_prompt):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return scripted({"kind": "open", "at": {"row": 1, "col": 2}})
+        return scripted({"kind": "open", "at": {"row": 3, "col": 1}})
+
+    records = run_multi_step(session, TEXTBOOK, "textbook", META, complete)
+    assert [record["label"] for record in records] == ["illegal", "supported"]
+    assert records[0]["stop_reason"] is None
+    assert records[-1]["stop_reason"] == "cleared"
+
+
+def test_mine_stops_the_episode(session):
     records = run_multi_step(
         session,
         TEXTBOOK,
         "textbook",
         META,
-        lambda _prompt: scripted({"kind": "open", "at": {"row": 2, "col": 1}}),
+        lambda _prompt: scripted({"kind": "open", "at": {"row": 1, "col": 1}}),
     )
     assert len(records) == 1
-    assert records[0]["label"] == "lucky"
-    assert records[0]["stop_reason"] == "lucky"
-    assert records[0]["status_after"] == "playing"
+    assert records[0]["label"] == "mine"
+    assert records[0]["stop_reason"] == "mine"
+    assert records[0]["status_after"] == "lost"
 
 
-def test_format_stops_without_another_request(session):
+def test_format_stalls_three_times_then_stops(session):
     calls = {"n": 0}
 
     def complete(_prompt):
@@ -97,10 +129,11 @@ def test_format_stops_without_another_request(session):
         return scripted(None)
 
     records = run_multi_step(session, TEXTBOOK, "textbook", META, complete)
-    assert calls["n"] == 1
-    assert records[0]["label"] == "format"
-    assert records[0]["stop_reason"] == "format"
-    assert records[0]["label"] in LABELS
+    assert calls["n"] == 3
+    assert len(records) == 3
+    assert [record["label"] for record in records] == ["format"] * 3
+    assert [record["stop_reason"] for record in records] == [None, None, "format"]
+    assert all(record["label"] in LABELS for record in records)
 
 
 def test_step_cap_stops_a_supported_game_that_is_still_playing(session, five_by_five):
