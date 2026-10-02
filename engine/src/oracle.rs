@@ -7,14 +7,16 @@
 //! `mines_total` of them. The local tiers (`ms_toollib` frontier solvers)
 //! never use that total; the global tier does, and only it does.
 //!
-//! Tiers are tried shallow-first: single cell, subset, then exact enumeration.
-//! A single-cell conclusion is written back and the same rule runs again, so a
+//! Tiers are tried shallow-first: single cell, subset, then exact enumeration,
+//! until one proves a safe cell. Mines proven on the way are marked and carried
+//! into the deeper tiers. A single-cell conclusion is written back and the same rule runs again, so a
 //! cell reached by repeating that rule stays in the single tier. The global
 //! completion runs on top of whatever the local tiers found: when every mine
 //! is already proven the rest unknown is safe (G1), and when the unknown cells
-//! exactly fill the quota the hidden ones are mines (G2). A position with a
-//! local deduction keeps its local tier; only a position with no local
-//! deduction at all is labeled with the global tier. The completion only adds
+//! exactly fill the quota the hidden ones are mines (G2). A position whose
+//! first safe cell comes from a local tier keeps that tier; one whose safe
+//! cells come only from the completion, or with no local deduction at all, is
+//! labeled with the global tier. The completion only adds
 //! cells, so every judgment made without it stays valid.
 //! A frontier block larger than [`MAX_ENUM_CELLS`] is rejected instead of treated as a guess.
 
@@ -27,7 +29,7 @@ use crate::game::{
     index_of, neighbor_indexes, Action, ActionKind, CellPos, PlayerBoard, Status, Visible,
 };
 
-pub const ORACLE_VERSION: &str = "1.0.0";
+pub const ORACLE_VERSION: &str = "1.1.0";
 pub const MAX_ENUM_CELLS: usize = 55;
 
 /// Shallowest deduction that still forces a cell.
@@ -113,41 +115,54 @@ pub fn forced(player: &PlayerBoard) -> Result<Forced, ForceError> {
     })
 }
 
+/// Tiers run shallow-first until one proves a safe cell. A mine-only result
+/// does not stop the search, because the gold path only opens: the mines are
+/// marked on the board so deeper tiers and the count completion can use them.
+/// The tier is the one that proved the first safe cell.
 fn deduce(
     player: &PlayerBoard,
 ) -> Result<(BTreeSet<CellPos>, BTreeSet<CellPos>, Tier), ForceError> {
-    let board = solver_board(player);
-    let (safe, mines) = run_direct(&board)?;
-    if !safe.is_empty() || !mines.is_empty() {
-        let (safe, mines) = extend_global(player, safe, mines);
-        return Ok((safe, mines, Tier::Single));
+    let mut board = solver_board(player);
+    let mut known = BTreeSet::new();
+    let mut first = None;
+    for tier in [Tier::Single, Tier::Subset, Tier::Enumerate] {
+        let (safe, mines) = match tier {
+            Tier::Single => run_direct(&board)?,
+            Tier::Subset => run_subset(&board)?,
+            _ => run_enumerate(&board)?,
+        };
+        if first.is_none() && !(safe.is_empty() && mines.is_empty()) {
+            first = Some(tier);
+        }
+        for &cell in &mines {
+            write_mark(&mut board, cell, 11);
+        }
+        known.extend(mines);
+        if !safe.is_empty() {
+            let (safe, mines) = extend_global(player, safe, known);
+            return Ok((safe, mines, tier));
+        }
     }
-    let (safe, mines) = run_subset(&board)?;
-    if !safe.is_empty() || !mines.is_empty() {
-        let (safe, mines) = extend_global(player, safe, mines);
-        return Ok((safe, mines, Tier::Subset));
+    let (safe, mines) = extend_global(player, BTreeSet::new(), known);
+    if !safe.is_empty() || (first.is_none() && !mines.is_empty()) {
+        return Ok((safe, mines, Tier::Global));
     }
-    let (_coefficients, variables, _constants, _inside, _flagged) =
-        ms_toollib::refresh_matrixs(&board);
+    Ok((safe, mines, first.unwrap_or(Tier::Enumerate)))
+}
+
+fn run_enumerate(
+    board: &Vec<Vec<i32>>,
+) -> Result<(BTreeSet<CellPos>, BTreeSet<CellPos>), ForceError> {
+    let (coefficients, variables, constants, _, _) = ms_toollib::refresh_matrixs(board);
     let widest = variables.iter().map(Vec::len).max().unwrap_or(0);
     if widest > MAX_ENUM_CELLS {
         return Err(ForceError::EnumLimit { cells: widest });
     }
-    let (coefficients, variables, constants) = fresh_matrices(&board);
-    let (safe, mines) = split_cells(ms_toollib::solve_enumerate(
+    Ok(split_cells(ms_toollib::solve_enumerate(
         &coefficients,
         &variables,
         &constants,
-    ));
-    if !safe.is_empty() || !mines.is_empty() {
-        let (safe, mines) = extend_global(player, safe, mines);
-        return Ok((safe, mines, Tier::Enumerate));
-    }
-    let (safe, mines) = extend_global(player, safe, mines);
-    if !safe.is_empty() || !mines.is_empty() {
-        return Ok((safe, mines, Tier::Global));
-    }
-    Ok((safe, mines, Tier::Enumerate))
+    )))
 }
 
 /// Mine-count completion over the local answer.
@@ -255,13 +270,6 @@ fn run_subset(board: &Vec<Vec<i32>>) -> Result<(BTreeSet<CellPos>, BTreeSet<Cell
     )
     .map_err(|_| ForceError::Inconsistent)?;
     Ok(split_cells(found))
-}
-
-fn fresh_matrices(
-    board: &Vec<Vec<i32>>,
-) -> (Vec<Vec<Vec<i32>>>, Vec<Vec<(usize, usize)>>, Vec<Vec<i32>>) {
-    let (coefficients, variables, constants, _, _) = ms_toollib::refresh_matrixs(board);
-    (coefficients, variables, constants)
 }
 
 fn split_cells(
@@ -445,6 +453,28 @@ mod tests {
         assert!(judged.actions.contains(&Action::flag(8, 7)));
         assert!(judged.actions.contains(&Action::flag(9, 6)));
         assert!(judged.actions.contains(&Action::open(9, 7)));
+    }
+
+    #[test]
+    fn a_mine_only_single_step_still_searches_for_an_open() {
+        // The single tier only proves (6,1) and (7,2) are mines. The open at
+        // (3,3) needs a deeper tier, and the gold path only opens.
+        let board = visible_board(&[
+            "#########",
+            "#########",
+            "#########",
+            "11111113#",
+            "11.....2#",
+            "#21....2#",
+            "2#1....2#",
+            "111....2#",
+            ".......1#",
+        ]);
+        let judged = forced(&board).unwrap();
+        assert!(judged.actions.contains(&Action::flag(6, 1)));
+        assert!(judged.actions.contains(&Action::flag(7, 2)));
+        assert!(judged.actions.contains(&Action::open(3, 3)));
+        assert!(judged.tier > Some(Tier::Single));
     }
 
     fn visible_board(rows: &[&str]) -> PlayerBoard {

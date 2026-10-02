@@ -25,7 +25,7 @@ WON = (
 )
 
 TEXTBOOK = {
-    "oracle_version": "1.0.0",
+    "oracle_version": "1.1.0",
     "seed": 0,
     "attempts": 1,
     "rows": 3,
