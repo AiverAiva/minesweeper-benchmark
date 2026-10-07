@@ -73,6 +73,90 @@ def test_run_writes_a_jsonl_log_without_a_key(tmp_path, engine_binary, capsys):
     assert "run done" in err
 
 
+def test_continue_refuses_to_start_without_an_env_key(monkeypatch, tmp_path, engine_binary, capsys):
+    monkeypatch.delenv("MS_API_KEY", raising=False)
+    board = tmp_path / "textbook.json"
+    board.write_text(json.dumps(TEXTBOOK), encoding="utf-8")
+    log_path = tmp_path / "run.jsonl"
+    log_path.write_text(
+        json.dumps(
+            {
+                "mode": "multi_step",
+                "episode_id": "textbook:0:3x3m2",
+                "fixture": "textbook",
+                "seed": 0,
+                "rows": 3,
+                "cols": 3,
+                "mines_total": 2,
+                "step_index": 0,
+                "label": None,
+                "stop_reason": "transport",
+                "transport_error": "HTTP 429",
+                "model": "m",
+                "run_id": "x",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    code = main(
+        [
+            "continue",
+            str(log_path),
+            "--fixture",
+            str(board),
+            "--base",
+            "https://example.com/v1",
+            "--binary",
+            str(engine_binary),
+        ]
+    )
+    assert code == 1
+    assert "MS_API_KEY" in capsys.readouterr().err
+
+
+def test_continue_refuses_a_finished_episode(tmp_path, engine_binary, capsys):
+    board = tmp_path / "textbook.json"
+    board.write_text(json.dumps(TEXTBOOK), encoding="utf-8")
+    log_path = tmp_path / "run.jsonl"
+    log_path.write_text(
+        json.dumps(
+            {
+                "mode": "multi_step",
+                "episode_id": "textbook:0:3x3m2",
+                "fixture": "textbook",
+                "seed": 0,
+                "rows": 3,
+                "cols": 3,
+                "mines_total": 2,
+                "step_index": 0,
+                "label": "mine",
+                "stop_reason": "mine",
+                "model": "m",
+                "run_id": "x",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    code = main(
+        [
+            "continue",
+            str(log_path),
+            "--fixture",
+            str(board),
+            "--base",
+            "https://example.com/v1",
+            "--model",
+            "m",
+            "--binary",
+            str(engine_binary),
+        ]
+    )
+    assert code == 1
+    assert "no resumable" in capsys.readouterr().err
+
+
 def test_summary_command_prints_the_classes(tmp_path, capsys):
     path = tmp_path / "run.jsonl"
     path.write_text(

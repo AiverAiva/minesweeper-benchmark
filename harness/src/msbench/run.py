@@ -6,7 +6,7 @@ import json
 import time
 import uuid
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from msbench.client import Completion, clip, complete_chat
@@ -14,7 +14,7 @@ from msbench.config import ConfigError, Settings, api_key, require_api
 from msbench.engine import EngineError, EngineSession, repo_root
 from msbench.progress import describe_action, duration, log
 from msbench.prompt import PROMPT_SHA256, render_prompt
-from msbench.score import GoldError, classify, hidden_count, replay_gold
+from msbench.score import LABELS, LEGAL, GoldError, classify, hidden_count, replay_gold
 
 
 @dataclass
@@ -55,6 +55,10 @@ def default_log_path(mode: str, run_id: str) -> Path:
 # Guesses and rejected moves are recorded and play continues; only a stuck
 # board (temp 0 repeats the same reply forever) needs this backstop.
 STALL_LIMIT = 3
+
+# Games that already ended. Stall (format/illegal/lucky with no board
+# progress) is a harness backstop, not a terminal position.
+_TERMINAL_STOPS = frozenset(("mine", "cleared", "step_cap"))
 
 
 def check_gold(paths: list[Path], binary: str | None = None) -> None:
@@ -215,20 +219,45 @@ def run_multi_step(
     *,
     step_cap: int | None = None,
     on_record: Callable[[dict], None] | None = None,
+    prior_records: list[dict] | None = None,
 ) -> list[dict]:
-    board_text, status = load_position(session, fixture, [])
-    if status != "playing":
-        raise EngineError("terminal", f"episode start of {fixture_name} is {status}, expected playing")
     cap = fixture["rows"] * fixture["cols"] if step_cap is None else step_cap
     episode_id = episode_identity(fixture_name, fixture)
-    log(
-        f"{fixture_name} episode start: {fixture.get('rows')}x{fixture.get('cols')} "
-        f"{fixture.get('mines_total')} mines bbbv={fixture.get('bbbv')}, step cap {cap}"
-    )
-    records = []
-    stalls = 0
-    while status == "playing" and len(records) < cap:
-        head = f"{fixture_name} step {len(records) + 1}"
+    prior = list(prior_records) if prior_records else []
+    if prior:
+        playable = playable_prefix(prior)
+        applied = [record for record in playable if record.get("label") in LEGAL and record.get("action")]
+        board_text, status = load_position(session, fixture, applied)
+        expected = _board_after_records(playable, fixture)
+        if board_text != expected:
+            raise EngineError(
+                "replay",
+                f"replayed board of {fixture_name} does not match the log",
+            )
+        if status != "playing":
+            raise EngineError("terminal", f"resumed episode of {fixture_name} is {status}, expected playing")
+        stalls = _trailing_stalls(playable)
+        if prior[-1].get("stop_reason") in LABELS:
+            stalls = 0
+        step_index = _next_step_index(prior)
+        log(
+            f"{fixture_name} episode continue: {fixture.get('rows')}x{fixture.get('cols')} "
+            f"{fixture.get('mines_total')} mines, resume step {step_index + 1}, "
+            f"replayed {len(applied)} moves, stalls {stalls}/{STALL_LIMIT}, cap {cap}"
+        )
+    else:
+        board_text, status = load_position(session, fixture, [])
+        if status != "playing":
+            raise EngineError("terminal", f"episode start of {fixture_name} is {status}, expected playing")
+        stalls = 0
+        step_index = 0
+        log(
+            f"{fixture_name} episode start: {fixture.get('rows')}x{fixture.get('cols')} "
+            f"{fixture.get('mines_total')} mines bbbv={fixture.get('bbbv')}, step cap {cap}"
+        )
+    records: list[dict] = []
+    while status == "playing" and step_index < cap:
+        head = f"{fixture_name} step {step_index + 1}"
         log(f"{head}: asking model (hidden={hidden_count(board_text)})")
         record = ask(
             session,
@@ -239,8 +268,8 @@ def run_multi_step(
             mode="multi_step",
             fixture_name=fixture_name,
             episode_id=episode_id,
-            item_id=f"{episode_id}:step{len(records)}",
-            step_index=len(records),
+            item_id=f"{episode_id}:step{step_index}",
+            step_index=step_index,
             sample_index=0,
             position_tier=None,
         )
@@ -256,15 +285,16 @@ def run_multi_step(
             status = record.get("status_after") or status
             board_text = record.get("text_after") or board_text
             stalls = 0
-            if len(records) >= cap:
+            if step_index + 1 >= cap:
                 record["stop_reason"] = "step_cap"
             else:
                 if on_record is not None:
                     on_record(record)
+                step_index += 1
                 continue
         else:
             stalls += 1
-            if len(records) >= cap:
+            if step_index + 1 >= cap:
                 record["stop_reason"] = "step_cap"
             elif stalls >= STALL_LIMIT:
                 record["stop_reason"] = record.get("label")
@@ -272,12 +302,13 @@ def run_multi_step(
                 log(f"{head}: no board change (stall {stalls}/{STALL_LIMIT})")
                 if on_record is not None:
                     on_record(record)
+                step_index += 1
                 continue
         if on_record is not None:
             on_record(record)
-        _episode_end(fixture_name, records)
+        _episode_end(fixture_name, records, total=step_index + 1)
         return records
-    _episode_end(fixture_name, records)
+    _episode_end(fixture_name, records, total=step_index if records else 0)
     return records
 
 
@@ -318,9 +349,10 @@ def _step_timing(record: dict) -> tuple[float | None, int | None]:
     return latency, tokens
 
 
-def _episode_end(fixture_name: str, records: list[dict]) -> None:
+def _episode_end(fixture_name: str, records: list[dict], *, total: int | None = None) -> None:
     reason = records[-1].get("stop_reason") if records else "nothing played"
-    log(f"{fixture_name} episode end: stop={reason}, steps={len(records)}")
+    count = len(records) if total is None else total
+    log(f"{fixture_name} episode end: stop={reason}, steps={count}")
 
 
 def ask(
@@ -408,6 +440,285 @@ def episode_identity(fixture_name: str, fixture: dict) -> str:
         f"{fixture_name}:{fixture.get('seed')}:"
         f"{fixture.get('rows')}x{fixture.get('cols')}m{fixture.get('mines_total')}"
     )
+
+
+def playable_prefix(records: list[dict]) -> list[dict]:
+    """Drop a trailing unlabeled transport tail, then keep the last record at each step_index."""
+    trimmed = list(records)
+    while trimmed and trimmed[-1].get("label") not in LABELS:
+        trimmed.pop()
+    return _latest_by_step(trimmed)
+
+
+def episode_is_resumable(records: list[dict]) -> bool:
+    """True when a multi-step episode is still playing after transport, a stall, or a crash."""
+    if not records:
+        return False
+    if any(record.get("mode") not in (None, "multi_step") for record in records):
+        return False
+    last = records[-1]
+    if last.get("stop_reason") in _TERMINAL_STOPS:
+        return False
+    if last.get("status_after") in ("won", "lost"):
+        return False
+    playable = playable_prefix(records)
+    if playable and playable[-1].get("status_after") in ("won", "lost"):
+        return False
+    return True
+
+
+def continue_log(
+    log_path: Path,
+    *,
+    settings: Settings,
+    fixture_paths: list[Path] | None = None,
+    out: Path | None = None,
+    complete=None,
+    step_cap: int | None = None,
+    model: str | None = None,
+    protocol: str | None = None,
+    temperature: float | None = None,
+    track: str | None = None,
+) -> tuple[list[dict], Path]:
+    """Replay applied moves from a partial multi-step log and keep asking from the break."""
+    records = _read_jsonl(log_path)
+    if not records:
+        raise ConfigError(f"{log_path} is empty")
+    jobs = [
+        (episode_id, steps)
+        for episode_id, steps in _multi_step_episodes(records)
+        if episode_is_resumable(steps)
+    ]
+    if not jobs:
+        raise ConfigError(f"no resumable multi-step episode in {log_path}")
+    destination = out or log_path
+    inplace = out is None
+    resumable_ids = {episode_id for episode_id, _steps in jobs}
+    seed_records = records if inplace else _continue_seed_records(records, resumable_ids)
+    hints = list(fixture_paths or [])
+    key = api_key()
+    started = time.monotonic()
+    new_records: list[dict] = []
+    handle = None
+    failed = False
+    log(
+        f"continue {log_path.name}: {len(jobs)} resumable episode(s) model from log, "
+        f"{'append ' if inplace else 'write '}{destination}"
+    )
+
+    def emit(record: dict) -> None:
+        if handle is None:
+            return
+        handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+        handle.flush()
+
+    try:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        handle = destination.open("a" if inplace else "w", encoding="utf-8", newline="\n")
+        if not inplace:
+            for seed in seed_records:
+                emit(seed)
+        with EngineSession(settings.binary) as session:
+            log(f"engine session started: {session.binary}")
+            for episode_id, steps in jobs:
+                path, fixture = resolve_fixture(steps[0], hints)
+                fixture_name = str(steps[0].get("fixture") or path.stem)
+                effective = _continue_settings(
+                    settings,
+                    steps[0],
+                    model=model,
+                    protocol=protocol,
+                    temperature=temperature,
+                )
+                step_complete = complete
+                if step_complete is None:
+                    require_api(effective, key)
+                    step_complete = _http_complete(effective, key)
+                meta = RunMeta(
+                    run_id=str(steps[0].get("run_id") or new_run_id()),
+                    model=effective.model,
+                    protocol=effective.protocol,
+                    track=str(track or steps[0].get("track") or settings.track),
+                    samples=1,
+                    temperature=effective.temperature,
+                )
+                log(
+                    f"resume {fixture_name} episode {episode_id} at step {_next_step_index(steps) + 1} "
+                    f"model={meta.model} timeout={effective.timeout}s"
+                )
+                new_records.extend(
+                    run_multi_step(
+                        session,
+                        fixture,
+                        fixture_name,
+                        meta,
+                        step_complete,
+                        step_cap=step_cap,
+                        on_record=emit,
+                        prior_records=steps,
+                    )
+                )
+    except Exception:
+        failed = True
+        raise
+    finally:
+        if handle is not None:
+            handle.close()
+        spent = duration(time.monotonic() - started)
+        if failed:
+            log(f"continue aborted after {spent}: {len(new_records)} new records in {destination}")
+        else:
+            log(f"continue done in {spent}: {len(new_records)} new records -> {destination}")
+    return seed_records + new_records, destination
+
+
+def resolve_fixture(record: dict, hints: list[Path]) -> tuple[Path, dict]:
+    name = str(record.get("fixture") or "")
+    candidates: list[Path] = list(hints)
+    if name:
+        candidates.extend(
+            [
+                Path(f"{name}.json"),
+                Path("runs") / f"{name}.json",
+                repo_root() / "runs" / f"{name}.json",
+            ]
+        )
+    seen: set[Path] = set()
+    for path in candidates:
+        try:
+            resolved = path.resolve()
+        except OSError:
+            resolved = path
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        if not path.is_file():
+            continue
+        fixture = load_fixture(path)
+        if _fixture_matches(record, fixture):
+            return path, fixture
+    identity = episode_identity(
+        name or "board",
+        {
+            "seed": record.get("seed"),
+            "rows": record.get("rows"),
+            "cols": record.get("cols"),
+            "mines_total": record.get("mines_total"),
+        },
+    )
+    raise ConfigError(f"cannot find a board JSON for {identity}. Pass --fixture path/to/board.json")
+
+
+def _continue_settings(
+    settings: Settings,
+    record: dict,
+    *,
+    model: str | None,
+    protocol: str | None,
+    temperature: float | None,
+) -> Settings:
+    logged_temperature = record.get("temperature")
+    return replace(
+        settings,
+        model=str(model or record.get("model") or settings.model),
+        protocol=str(protocol or record.get("protocol") or settings.protocol),
+        temperature=(
+            temperature
+            if temperature is not None
+            else logged_temperature if isinstance(logged_temperature, (int, float)) else settings.temperature
+        ),
+        samples=1,
+    )
+
+
+def _continue_seed_records(records: list[dict], resumable_ids: set[str]) -> list[dict]:
+    grouped = dict(_multi_step_episodes(records))
+    keep = {id(step) for episode_id in resumable_ids for step in playable_prefix(grouped.get(episode_id, []))}
+    seeded = []
+    for record in records:
+        if record.get("mode") != "multi_step":
+            seeded.append(record)
+            continue
+        episode_id = str(record.get("episode_id"))
+        if episode_id not in resumable_ids or id(record) in keep:
+            seeded.append(record)
+    return seeded
+
+
+def _multi_step_episodes(records: list[dict]) -> list[tuple[str, list[dict]]]:
+    grouped: dict[str, list[dict]] = {}
+    order: list[str] = []
+    for record in records:
+        if record.get("mode") != "multi_step":
+            continue
+        key = str(record.get("episode_id"))
+        if key not in grouped:
+            grouped[key] = []
+            order.append(key)
+        grouped[key].append(record)
+    return [(key, grouped[key]) for key in order]
+
+
+def _read_jsonl(path: Path) -> list[dict]:
+    records = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.strip():
+            records.append(json.loads(line))
+    return records
+
+
+def _fixture_matches(record: dict, fixture: dict) -> bool:
+    for key in ("seed", "rows", "cols", "mines_total"):
+        expected = record.get(key)
+        if expected is None:
+            continue
+        if fixture.get(key) != expected:
+            return False
+    return True
+
+
+def _latest_by_step(records: list[dict]) -> list[dict]:
+    latest: dict[int, dict] = {}
+    order: list[int] = []
+    for record in records:
+        index = record.get("step_index")
+        if not isinstance(index, int):
+            index = 0
+        if index not in latest:
+            order.append(index)
+        latest[index] = record
+    return [latest[index] for index in order]
+
+
+def _board_after_records(records: list[dict], fixture: dict) -> str:
+    for record in reversed(records):
+        after = record.get("text_after")
+        if after:
+            return after
+        before = record.get("board_text")
+        if before:
+            return before
+    return fixture.get("initial_text") or ""
+
+
+def _trailing_stalls(records: list[dict]) -> int:
+    stalls = 0
+    for record in reversed(records):
+        after = record.get("text_after")
+        if after and after != record.get("board_text"):
+            break
+        stalls += 1
+    return stalls
+
+
+def _next_step_index(records: list[dict]) -> int:
+    last = records[-1]
+    index = last.get("step_index")
+    if not isinstance(index, int):
+        index = 0
+    if last.get("label") not in LABELS or last.get("stop_reason") == "transport" or last.get("transport_error"):
+        return index
+    return index + 1
 
 
 def _http_complete(settings: Settings, key: str):

@@ -88,6 +88,32 @@ def test_five_rates_sum_to_one_and_reasoning_excludes_format_and_illegal():
     assert one["chance"] == pytest.approx(0.3)
 
 
+def test_retried_step_index_replaces_transport_in_the_score():
+    records = [
+        multi("resume", 0, "supported", None, 9, 9, 10, 10, 1),
+        {
+            "mode": "multi_step",
+            "episode_id": "resume",
+            "item_id": "resume:step1",
+            "step_index": 1,
+            "label": None,
+            "stop_reason": "transport",
+            "rows": 9,
+            "cols": 9,
+            "mines_total": 10,
+            "attempts": [attempt(None, None, None)],
+        },
+        multi("resume", 1, "supported", "cleared", 9, 9, 10, 10, 1),
+    ]
+    block = analyze(records, draws=20)["multi_step"]
+    assert block["episodes"] == 1
+    assert block["scored"] == 1
+    assert block["transport"] == 0
+    assert block["clear_rate"] == pytest.approx(1)
+    assert block["prefix_mean"] == pytest.approx(2)
+    assert block["counts"]["supported"] == 2
+
+
 def test_multi_step_clear_rate_and_prefix_skip_transport():
     multi_step = analyze(sample_log(), draws=50)["multi_step"]
     assert multi_step["episodes"] == 3

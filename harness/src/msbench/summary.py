@@ -181,7 +181,22 @@ def _episode_costs(records: list[dict]) -> dict:
     }
 
 
+def active_steps(steps: list[dict]) -> list[dict]:
+    """Last record at each step_index wins so a continue retry replaces a transport failure."""
+    latest: dict[int, dict] = {}
+    order: list[int] = []
+    for step in steps:
+        index = step.get("step_index")
+        if not isinstance(index, int):
+            index = 0
+        if index not in latest:
+            order.append(index)
+        latest[index] = step
+    return [latest[index] for index in order]
+
+
 def _score_episode(steps: list[dict]) -> dict:
+    steps = active_steps(steps)
     transport = any(step.get("label") not in LABELS for step in steps)
     prefix = 0
     for step in steps:

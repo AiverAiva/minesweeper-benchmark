@@ -13,7 +13,7 @@ from pathlib import Path
 from msbench.client import FatalApiError
 from msbench.config import ConfigError, load_settings
 from msbench.engine import EngineError
-from msbench.run import check_gold, run_paths
+from msbench.run import check_gold, continue_log, run_paths
 from msbench.score import GoldError
 from msbench.summary import load_jsonl, render_paired, paired_bootstrap, summarize
 
@@ -60,6 +60,29 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("one-step", parents=[shared], help="ask once at every position along the gold path")
     sub.add_parser("multi-step", parents=[shared], help="play from the opening until the first non-forced move")
 
+    cont = sub.add_parser(
+        "continue",
+        help="resume a multi-step log that stopped on transport, a stall, or a crash",
+    )
+    cont.add_argument("logs", nargs="+", metavar="run.jsonl", help="multi-step JSONL to resume")
+    cont.add_argument(
+        "--fixture",
+        action="append",
+        default=[],
+        dest="fixture_hints",
+        metavar="board.json",
+        help="board JSON for a log whose fixture is not at runs/{name}.json",
+    )
+    cont.add_argument("--out", default=None, help="write a new JSONL instead of appending to the log")
+    cont.add_argument("--base", default=None)
+    cont.add_argument("--model", default=None, help="override the model stored in the log")
+    cont.add_argument("--protocol", default=None)
+    cont.add_argument("--temperature", type=float, default=None)
+    cont.add_argument("--max-retries", dest="max_retries", type=int, default=None)
+    cont.add_argument("--timeout", type=float, default=None)
+    cont.add_argument("--track", default=None)
+    cont.add_argument("--binary", default=None)
+
     summary = sub.add_parser("summary", help="summarize JSONL records")
     summary.add_argument("logs", nargs="+")
 
@@ -71,6 +94,8 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "summary":
             return _summary([Path(path) for path in args.logs])
         settings = load_settings(args)
+        if args.command == "continue":
+            return _continue(args, settings)
         records, destination = run_paths(
             [Path(path) for path in args.fixtures],
             mode=args.command.replace("-", "_"),
@@ -82,6 +107,30 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     print(f"wrote {destination}  records={len(records)}")
     print(summarize(records), end="")
+    return 0
+
+
+def _continue(args, settings) -> int:
+    logs = [Path(path) for path in args.logs]
+    if args.out and len(logs) > 1:
+        raise ConfigError("pass one log when using --out")
+    hints = [Path(path) for path in args.fixture_hints]
+    collected: list[dict] = []
+    destination = logs[0]
+    for path in logs:
+        records, destination = continue_log(
+            path,
+            settings=settings,
+            fixture_paths=hints,
+            out=Path(args.out) if args.out else None,
+            model=args.model,
+            protocol=args.protocol,
+            temperature=args.temperature,
+            track=args.track,
+        )
+        collected.extend(records)
+        print(f"wrote {destination}  records={len(records)}")
+    print(summarize(collected), end="")
     return 0
 
 

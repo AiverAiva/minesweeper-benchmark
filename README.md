@@ -68,12 +68,13 @@ cp harness/.env.example harness/.env
 uv run --project harness msbench gold runs/beginner.json
 uv run --project harness msbench one-step runs/beginner.json
 uv run --project harness msbench multi-step runs/beginner.json
+uv run --project harness msbench continue runs/<run>.jsonl --timeout 300
 uv run --project harness msbench summary runs/<run>.jsonl
 ```
 
 `one-step` asks once at every position along `gold`. Each item reloads the fixture and replays the gold prefix up to that position. `multi-step` keeps one engine session from the opening until the mine explodes or the board is won. Guesses and rejected moves are recorded and play continues; three straight steps without board progress end the episode. Each model call is a new request containing the fixed prompt and the current board. Earlier replies are not sent back.
 
-Logs are written to `runs/{run_id}-{mode}.jsonl`. Records stream to the file as each move is scored, so a run can be watched or resumed from a partial log. `summary` prints a Traditional Chinese report. Passing exactly two logs also prints a paired bootstrap of the second file minus the first.
+Logs are written to `runs/{run_id}-{mode}.jsonl`. Records stream to the file as each move is scored. `continue` resumes a multi-step log that stopped on a transport failure (timeout, HTTP 429/5xx, empty connection), a stall (three steps with no board progress), or a crash while the board was still playing. It replays applied moves onto the same frozen board and asks again from the interrupted step. A stall resume starts at the next step with a fresh stall limit. Finished games (mine, clear, step cap) are left as they are. Model, protocol, and temperature come from the log unless you pass `--model`, `--protocol`, or `--temperature`. `--timeout` and `--max-retries` always come from the current flags or env, so a longer timeout can finish a run that hit the default 120s. Default appends new records to the same JSONL. `--out other.jsonl` writes the playable prefix plus the new steps to a new file. If the board JSON is not at `runs/{fixture}.json`, pass `--fixture path/to/board.json`. `summary` treats a retried `step_index` as the last record at that step. Passing exactly two logs also prints a paired bootstrap of the second file minus the first.
 
 ## Read a log
 
