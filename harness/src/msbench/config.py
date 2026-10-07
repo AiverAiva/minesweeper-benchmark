@@ -82,17 +82,17 @@ def load_settings(args) -> Settings:
     temperature = _float(args, "temperature", "MS_TEMPERATURE", 0.0)
     samples = _int(args, "samples", "MS_SAMPLES", 1)
     if temperature < 0:
-        raise ConfigError("temperature 需要大於或等於 0。")
+        raise ConfigError("temperature must be >= 0")
     if samples < 1:
-        raise ConfigError("samples 需要至少 1。")
+        raise ConfigError("samples must be at least 1")
     if temperature == 0 and samples != 1:
-        raise ConfigError("temperature 0 每個位置只抽一次。要重複抽樣就調高 MS_TEMPERATURE。")
+        raise ConfigError("temperature 0 samples each position once; raise MS_TEMPERATURE to resample")
     max_retries = _int(args, "max_retries", "MS_MAX_RETRIES", 2)
     timeout = _float(args, "timeout", "MS_TIMEOUT", 120.0)
     if max_retries < 0:
-        raise ConfigError("max_retries 需要大於或等於 0。")
+        raise ConfigError("max_retries must be >= 0")
     if timeout <= 0:
-        raise ConfigError("timeout 需要大於 0。")
+        raise ConfigError("timeout must be > 0")
     base = _text(args, "base", "MS_API_BASE", "")
     return Settings(
         base=base.rstrip("/"),
@@ -110,13 +110,15 @@ def load_settings(args) -> Settings:
 def require_api(settings: Settings, key: str) -> None:
     env_file = default_dotenv()
     if not settings.base:
-        raise ConfigError(f"在 {env_file} 設定 MS_API_BASE，或傳 --base。位址是以 /v1 結尾的 API 根。")
+        raise ConfigError(
+            f"set MS_API_BASE in {env_file} or pass --base. The base is an API root ending in /v1."
+        )
     if not settings.base.startswith(("http://", "https://")):
-        raise ConfigError("MS_API_BASE 需要以 http:// 或 https:// 開頭。")
+        raise ConfigError("MS_API_BASE must start with http:// or https://")
     if not settings.model:
-        raise ConfigError(f"在 {env_file} 設定 MS_MODEL，或傳 --model。")
+        raise ConfigError(f"set MS_MODEL in {env_file} or pass --model")
     if not key:
-        raise ConfigError(f"在 {env_file} 寫上 MS_API_KEY。")
+        raise ConfigError(f"write MS_API_KEY into {env_file}")
 
 
 def _env_name(key: str) -> bool:
@@ -153,7 +155,7 @@ def _int(args, name: str, env_name: str, default: int) -> int:
     try:
         return int(raw)
     except ValueError as error:
-        raise ConfigError(f"{env_name} 需要整數，收到 {raw}。") from error
+        raise ConfigError(f"{env_name} needs an integer, got {raw}") from error
 
 
 def _float(args, name: str, env_name: str, default: float) -> float:
@@ -161,4 +163,4 @@ def _float(args, name: str, env_name: str, default: float) -> float:
     try:
         return float(raw)
     except ValueError as error:
-        raise ConfigError(f"{env_name} 需要數字，收到 {raw}。") from error
+        raise ConfigError(f"{env_name} needs a number, got {raw}") from error

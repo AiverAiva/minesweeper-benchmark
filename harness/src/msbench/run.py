@@ -3,16 +3,16 @@
 from __future__ import annotations
 
 import json
-import sys
 import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from msbench.client import Completion, complete_chat
+from msbench.client import Completion, clip, complete_chat
 from msbench.config import ConfigError, Settings, api_key, require_api
 from msbench.engine import EngineError, EngineSession, repo_root
+from msbench.progress import describe_action, duration, log
 from msbench.prompt import PROMPT_SHA256, render_prompt
 from msbench.score import GoldError, classify, hidden_count, replay_gold
 
@@ -75,7 +75,7 @@ def run_paths(
     step_cap: int | None = None,
 ) -> tuple[list[dict], Path]:
     if mode == "multi_step" and settings.samples != 1:
-        raise ConfigError("多步目前每個局面只走一次。MS_SAMPLES 請維持 1。")
+        raise ConfigError("multi_step plays each position once; keep MS_SAMPLES at 1")
     key = api_key()
     if complete is None:
         require_api(settings, key)
@@ -85,6 +85,13 @@ def run_paths(
     records: list[dict] = []
     handle = None
     failed = False
+    started = time.monotonic()
+    log(
+        f"run {meta.run_id} start: mode={mode} model={meta.model} protocol={meta.protocol} "
+        f"track={meta.track} temperature={meta.temperature} samples={meta.samples} "
+        f"fixtures={len(paths)}"
+    )
+    log(f"streaming records to {destination}")
 
     def emit(record: dict) -> None:
         nonlocal handle
@@ -96,8 +103,17 @@ def run_paths(
 
     try:
         with EngineSession(settings.binary) as session:
-            for path in paths:
+            log(f"engine session started: {session.binary}")
+            for index, path in enumerate(paths, start=1):
                 fixture = load_fixture(path)
+                header = (
+                    f"fixture {index}/{len(paths)} {path.stem}: seed={fixture.get('seed')} "
+                    f"{fixture.get('rows')}x{fixture.get('cols')} {fixture.get('mines_total')} mines "
+                    f"bbbv={fixture.get('bbbv')}"
+                )
+                if mode == "one_step":
+                    header += f" gold_steps={len(fixture.get('gold') or [])}"
+                log(header)
                 records.extend(
                     run_fixture(
                         session,
@@ -116,8 +132,11 @@ def run_paths(
     finally:
         if handle is not None:
             handle.close()
-        if failed and records:
-            print(f"已寫入未完成的紀錄 {destination}", file=sys.stderr)
+        spent = duration(time.monotonic() - started)
+        if failed:
+            log(f"run aborted after {spent}: {len(records)} records in {destination}")
+        else:
+            log(f"run done in {spent}: {len(records)} records -> {destination}")
     return records, destination
 
 
@@ -136,11 +155,11 @@ def run_fixture(
         return run_one_step(session, fixture, fixture_name, meta, complete, on_record=on_record)
     if mode == "multi_step":
         if meta.samples != 1:
-            raise ConfigError("多步目前每個局面只走一次。MS_SAMPLES 請維持 1。")
+            raise ConfigError("multi_step plays each position once; keep MS_SAMPLES at 1")
         return run_multi_step(
             session, fixture, fixture_name, meta, complete, step_cap=step_cap, on_record=on_record
         )
-    raise ConfigError(f"未知模式 {mode}")
+    raise ConfigError(f"unknown mode {mode}")
 
 
 def run_one_step(
@@ -148,14 +167,23 @@ def run_one_step(
 ) -> list[dict]:
     gold = fixture.get("gold") or []
     if not gold:
-        raise GoldError("fixture 沒有 gold 步，無法切一步快照")
+        raise GoldError("fixture has no gold steps; one_step needs them for snapshots")
     episode_id = episode_identity(fixture_name, fixture)
+    total = len(gold)
     records = []
     for index, step in enumerate(gold):
+        tier = step.get("tier")
         for sample_index in range(meta.samples):
             board_text, status = load_position(session, fixture, gold[:index])
             if status != "playing":
-                raise EngineError("terminal", f"第 {index} 步快照的狀態是 {status}")
+                raise EngineError(
+                    "terminal",
+                    f"snapshot {index + 1}/{total} of {fixture_name} is {status}, expected playing",
+                )
+            head = f"{fixture_name} step {index + 1}/{total}"
+            if meta.samples > 1:
+                head += f" sample {sample_index + 1}/{meta.samples}"
+            log(f"{head}: asking model (hidden={hidden_count(board_text)}, pos_tier={tier})")
             records.append(
                 ask(
                     session,
@@ -169,9 +197,10 @@ def run_one_step(
                     item_id=f"{episode_id}:step{index}",
                     step_index=index,
                     sample_index=sample_index,
-                    position_tier=step.get("tier"),
+                    position_tier=tier,
                 )
             )
+            log(f"{head}: {step_summary(records[-1], board_text)}")
             if on_record is not None:
                 on_record(records[-1])
     return records
@@ -189,12 +218,18 @@ def run_multi_step(
 ) -> list[dict]:
     board_text, status = load_position(session, fixture, [])
     if status != "playing":
-        raise EngineError("terminal", f"開局狀態是 {status}")
+        raise EngineError("terminal", f"episode start of {fixture_name} is {status}, expected playing")
     cap = fixture["rows"] * fixture["cols"] if step_cap is None else step_cap
     episode_id = episode_identity(fixture_name, fixture)
+    log(
+        f"{fixture_name} episode start: {fixture.get('rows')}x{fixture.get('cols')} "
+        f"{fixture.get('mines_total')} mines bbbv={fixture.get('bbbv')}, step cap {cap}"
+    )
     records = []
     stalls = 0
     while status == "playing" and len(records) < cap:
+        head = f"{fixture_name} step {len(records) + 1}"
+        log(f"{head}: asking model (hidden={hidden_count(board_text)})")
         record = ask(
             session,
             complete,
@@ -210,6 +245,7 @@ def run_multi_step(
             position_tier=None,
         )
         records.append(record)
+        log(f"{head}: {step_summary(record, board_text)}")
         if record.get("transport_error"):
             record["stop_reason"] = "transport"
         elif record.get("status_after") == "lost":
@@ -233,13 +269,58 @@ def run_multi_step(
             elif stalls >= STALL_LIMIT:
                 record["stop_reason"] = record.get("label")
             else:
+                log(f"{head}: no board change (stall {stalls}/{STALL_LIMIT})")
                 if on_record is not None:
                     on_record(record)
                 continue
         if on_record is not None:
             on_record(record)
+        _episode_end(fixture_name, records)
         return records
+    _episode_end(fixture_name, records)
     return records
+
+
+def step_summary(record: dict, board_before: str) -> str:
+    """One line on what the model played and what the move changed."""
+    if record.get("transport_error"):
+        return f"transport error: {record['transport_error']}"
+    played = f"{describe_action(record.get('action'))} -> {record.get('label')}"
+    detail = record.get("detail")
+    if detail:
+        played += f" ({clip(str(detail), 120)})"
+    parts = [played]
+    if record.get("status_after"):
+        parts.append(f"status={record['status_after']}")
+    hidden = str(record.get("hidden_count"))
+    after = record.get("text_after")
+    if after:
+        hidden += f"->{hidden_count(after)}"
+    parts.append(f"hidden {hidden}")
+    latency, tokens = _step_timing(record)
+    if latency is not None:
+        parts.append(f"{latency / 1000:.1f}s")
+    if tokens is not None:
+        parts.append(f"{tokens} tok")
+    return ", ".join(parts)
+
+
+def _step_timing(record: dict) -> tuple[float | None, int | None]:
+    attempts = record.get("attempts") or []
+    latency = next(
+        (item.get("latency_ms") for item in reversed(attempts) if item.get("latency_ms") is not None),
+        None,
+    )
+    tokens = next(
+        (item.get("total_tokens") for item in reversed(attempts) if item.get("total_tokens") is not None),
+        None,
+    )
+    return latency, tokens
+
+
+def _episode_end(fixture_name: str, records: list[dict]) -> None:
+    reason = records[-1].get("stop_reason") if records else "nothing played"
+    log(f"{fixture_name} episode end: stop={reason}, steps={len(records)}")
 
 
 def ask(
@@ -315,7 +396,7 @@ def load_position(session: EngineSession, fixture: dict, prefix: list[dict]) -> 
         if not applied.get("ok"):
             raise EngineError(
                 str(applied.get("error") or "apply"),
-                f"重放 gold 失敗: {applied.get('detail')}",
+                f"gold replay failed: {applied.get('detail')}",
             )
         text = applied.get("text") or ""
         status = applied.get("status")
@@ -339,6 +420,7 @@ def _http_complete(settings: Settings, key: str):
             temperature=settings.temperature,
             max_retries=settings.max_retries,
             timeout=settings.timeout,
+            report=log,
         )
 
     return complete

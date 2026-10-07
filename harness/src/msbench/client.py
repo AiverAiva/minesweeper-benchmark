@@ -72,6 +72,14 @@ def backoff_seconds(retry_number: int) -> float:
     return float(min(2 ** (retry_number - 1), 8))
 
 
+def _announce(report, index: int, max_retries: int, message: str) -> None:
+    """Narrate a failed attempt that will be retried after backoff."""
+    if report is None or index >= max_retries:
+        return
+    wait = backoff_seconds(index + 1)
+    report(f"api attempt {index + 1} failed: {clip(message, 160)}; retrying in {wait:.0f}s")
+
+
 def complete_chat(
     *,
     prompt: str,
@@ -83,7 +91,9 @@ def complete_chat(
     timeout: float = 120,
     post=None,
     sleep=None,
+    report=None,
 ) -> Completion:
+    """Send one completion. `report` narrates every retry to the caller."""
     sender = urllib_post if post is None else post
     pause = time.sleep if sleep is None else sleep
     url = chat_url(base)
@@ -114,6 +124,7 @@ def complete_chat(
             message = clip(f"{type(error).__name__}: {error}")
             attempts.append(_attempt(index, latency_ms=_elapsed(started), error=message))
             last_error = message
+            _announce(report, index, max_retries, message)
             continue
         latency_ms = _elapsed(started)
         if status != 200:
@@ -123,6 +134,7 @@ def complete_chat(
             )
             if status == 429 or status >= 500:
                 last_error = message
+                _announce(report, index, max_retries, message)
                 continue
             raise FatalApiError(status, message, attempts)
         parsed = _parse_success(raw)
@@ -132,6 +144,7 @@ def complete_chat(
                 _attempt(index, http_status=status, latency_ms=latency_ms, error=message)
             )
             last_error = message
+            _announce(report, index, max_retries, message)
             continue
         text, reasoning, action, finish_reason, input_tokens, output_tokens, reasoning_tokens, total_tokens = parsed
         attempts.append(

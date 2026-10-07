@@ -169,3 +169,34 @@ def test_transport_mid_episode_stops_and_is_unlabeled(session, five_by_five):
     assert records[1]["transport_error"] == "timed out"
     assert records[1]["stop_reason"] == "transport"
     assert records[1]["forced_count"] is not None
+
+
+def test_multi_step_narrates_every_step(session, five_by_five, capsys):
+    cursor = {"n": 0}
+
+    def complete(_prompt):
+        action = five_by_five["gold"][cursor["n"]]["action"]
+        cursor["n"] += 1
+        return scripted(action)
+
+    run_multi_step(session, five_by_five, "five", META, complete)
+    err = capsys.readouterr().err
+    assert "episode start" in err
+    assert "asking model" in err
+    assert "-> supported" in err
+    assert "episode end: stop=cleared" in err
+
+
+def test_one_step_narrates_the_position_tier(session, five_by_five, capsys):
+    calls = {"n": 0}
+
+    def complete(_prompt):
+        action = five_by_five["gold"][calls["n"]]["action"]
+        calls["n"] += 1
+        return scripted(action)
+
+    run_one_step(session, five_by_five, "five", META, complete)
+    err = capsys.readouterr().err
+    assert "step 1/" in err
+    assert "pos_tier=" in err
+    assert "-> supported" in err

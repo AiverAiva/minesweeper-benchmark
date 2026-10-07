@@ -31,7 +31,7 @@ def classify(session: EngineSession, action: dict | None, judged: dict | None = 
         judged = session.forced()
     actions = judged.get("actions")
     if not isinstance(actions, list):
-        raise EngineError("protocol", "forced 回應沒有 actions")
+        raise EngineError("protocol", "engine forced response has no actions list")
     outcome = {
         "forced_tier": judged.get("tier"),
         "forced_actions": actions,
@@ -52,7 +52,7 @@ def classify(session: EngineSession, action: dict | None, judged: dict | None = 
         if not applied.get("ok"):
             raise EngineError(
                 str(applied.get("error") or "apply"),
-                f"必走動作無法執行: {applied.get('detail') or parsed}",
+                f"forced action failed to apply: {applied.get('detail') or parsed}",
             )
         outcome["label"] = "supported"
         outcome["status_after"] = applied.get("status")
@@ -74,21 +74,24 @@ def classify(session: EngineSession, action: dict | None, judged: dict | None = 
 def replay_gold(session: EngineSession, fixture: dict) -> None:
     opened = session.new_fixture(fixture)
     if opened.get("text") != fixture.get("initial_text"):
-        raise GoldError("開局畫面與 fixture.initial_text 不一致")
+        raise GoldError("opening board differs from fixture.initial_text")
     gold = fixture.get("gold") or []
     if not gold:
-        raise GoldError("fixture 沒有 gold 步")
+        raise GoldError("fixture has no gold steps")
     last = opened
     for index, step in enumerate(gold, start=1):
         judged = session.forced()
         if judged.get("tier") != step.get("tier"):
-            raise GoldError(f"第 {index} 步層級是 {judged.get('tier')}，fixture 寫 {step.get('tier')}")
+            raise GoldError(
+                f"gold step {index}: engine tier is {judged.get('tier')}, "
+                f"fixture says {step.get('tier')}"
+            )
         if step.get("action") not in judged.get("actions", []):
-            raise GoldError(f"第 {index} 步不在當下的必走集合")
+            raise GoldError(f"gold step {index} is not in the current forced set")
         last = session.apply(step["action"])
         if not last.get("ok"):
-            raise GoldError(f"第 {index} 步無法執行: {last.get('detail')}")
+            raise GoldError(f"gold step {index} failed to apply: {last.get('detail')}")
         if last.get("text") != step.get("text_after"):
-            raise GoldError(f"第 {index} 步畫面與 text_after 不一致")
+            raise GoldError(f"gold step {index} board differs from text_after")
     if last.get("status") != "won":
-        raise GoldError(f"gold 走完的狀態是 {last.get('status')}")
+        raise GoldError(f"status after gold is {last.get('status')}, expected won")

@@ -204,6 +204,52 @@ def test_server_error_is_retried_then_scored():
     assert "sk-super-secret" not in json.dumps(result.attempts)
 
 
+def test_retryable_failures_are_reported_before_the_retry():
+    calls = {"n": 0}
+    notes: list[str] = []
+
+    def post(url, headers, body, timeout):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return 500, "busy"
+        return 200, _ok()
+
+    complete_chat(
+        prompt="board",
+        base="https://example.com/v1",
+        key="sk-test",
+        model="m",
+        max_retries=1,
+        post=post,
+        sleep=lambda _seconds: None,
+        report=notes.append,
+    )
+    assert calls["n"] == 2
+    assert len(notes) == 1
+    assert "api attempt 1 failed" in notes[0]
+    assert "http 500" in notes[0]
+    assert "retrying in 1s" in notes[0]
+
+
+def test_fatal_client_errors_are_not_reported_as_retries():
+    notes: list[str] = []
+
+    def post(url, headers, body, timeout):
+        return 400, "nope"
+
+    with pytest.raises(FatalApiError):
+        complete_chat(
+            prompt="board",
+            base="https://example.com/v1",
+            key="sk-test",
+            model="m",
+            post=post,
+            sleep=lambda _seconds: None,
+            report=notes.append,
+        )
+    assert notes == []
+
+
 @pytest.mark.parametrize("status", [429, 500, 503])
 def test_retryable_statuses_become_transport_when_retries_are_spent(status):
     def post(url, headers, body, timeout):

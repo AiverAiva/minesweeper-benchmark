@@ -38,7 +38,7 @@ def test_one_step_refuses_to_start_without_an_env_key(monkeypatch, tmp_path, eng
     assert "MS_API_KEY" in capsys.readouterr().err
 
 
-def test_run_writes_a_jsonl_log_without_a_key(tmp_path, engine_binary):
+def test_run_writes_a_jsonl_log_without_a_key(tmp_path, engine_binary, capsys):
     path = tmp_path / "textbook.json"
     path.write_text(json.dumps(TEXTBOOK), encoding="utf-8")
     out = tmp_path / "out.jsonl"
@@ -65,13 +65,19 @@ def test_run_writes_a_jsonl_log_without_a_key(tmp_path, engine_binary):
     saved = out.read_text(encoding="utf-8")
     assert json.loads(saved)["label"] == "supported"
     assert "sk-" not in saved
+    err = capsys.readouterr().err
+    assert "start: mode=multi_step model=scripted" in err
+    assert "streaming records to" in err
+    assert "engine session started" in err
+    assert "fixture 1/1 textbook:" in err
+    assert "run done" in err
 
 
-def test_summary_command_prints_chinese(tmp_path, capsys):
+def test_summary_command_prints_the_classes(tmp_path, capsys):
     path = tmp_path / "run.jsonl"
     path.write_text(
         json.dumps({"mode": "one_step", "item_id": "a", "label": "format", "attempts": []}) + "\n",
         encoding="utf-8",
     )
     assert main(["summary", str(path)]) == 0
-    assert "格式" in capsys.readouterr().out
+    assert "format" in capsys.readouterr().out

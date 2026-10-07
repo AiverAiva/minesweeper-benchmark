@@ -25,7 +25,7 @@ def repo_root() -> Path:
     for parent in here.parents:
         if (parent / "Cargo.toml").is_file() and (parent / "engine" / "Cargo.toml").is_file():
             return parent
-    raise EngineError("missing_workspace", "找不到 minesweeper engine 的 Cargo workspace")
+    raise EngineError("missing_workspace", "cannot locate the minesweeper Cargo workspace")
 
 
 def default_binary() -> Path:
@@ -54,7 +54,8 @@ class EngineSession:
         if not self.binary.is_file():
             raise EngineError(
                 "missing_binary",
-                f"找不到 {self.binary}。先在倉庫根目錄執行 cargo build -p minesweeper-engine，或設定 MSENGINE。",
+                f"engine binary not found: {self.binary}. "
+                "Build it with `cargo build -p minesweeper-engine` at the repo root, or set MSENGINE.",
             )
         self.proc = subprocess.Popen(
             [str(self.binary), "session"],
@@ -66,7 +67,7 @@ class EngineSession:
         self._thread.start()
         pong = self._raw({"op": "ping"})
         if pong.get("op") != "pong":
-            raise EngineError("protocol", "msengine session 沒有回 pong")
+            raise EngineError("protocol", "msengine session did not reply to ping with pong")
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
@@ -105,14 +106,14 @@ class EngineSession:
     def _raw(self, payload: dict) -> dict:
         proc = self.proc
         if proc is None or proc.stdin is None or proc.stdout is None:
-            raise EngineError("eof", "msengine session 尚未啟動")
+            raise EngineError("eof", "msengine session is not running")
         if proc.poll() is not None:
-            raise EngineError("eof", self._stderr_text() or f"msengine 已結束，代碼 {proc.returncode}")
+            raise EngineError("eof", self._stderr_text() or f"msengine exited with code {proc.returncode}")
         proc.stdin.write((json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8"))
         proc.stdin.flush()
         raw = proc.stdout.readline()
         if not raw:
-            detail = self._stderr_text() or "msengine 關閉了 stdout"
+            detail = self._stderr_text() or "msengine closed stdout"
             raise EngineError("eof", detail)
         text = raw.decode("utf-8").strip()
         try:
