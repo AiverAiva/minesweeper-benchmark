@@ -22,21 +22,21 @@ def main(argv: list[str] | None = None) -> int:
     _configure_stdio()
     parser = argparse.ArgumentParser(
         prog="msbench",
-        description="踩地雷推理的文字測驗。規則在 msengine，這裡負責提示、API 與計分。",
+        description="Text harness for the minesweeper reasoning benchmark. Rules live in msengine; this CLI handles prompts, the API, and scoring.",
         epilog=(
-            "設定寫在 harness/.env，範例是 harness/.env.example。\n"
-            "MS_API_BASE 是以 /v1 結尾的 API 根。MS_MODEL 是模型 id。MS_API_KEY 是金鑰。\n"
-            "已經在環境裡的同名變數會蓋過這個檔案。\n"
-            "MS_PROTOCOL 只寫進紀錄（instruct 或 thinking），預設 instruct。\n"
-            "請求以串流送出，不送 token 上限。模型自己停，用量照回應裡的 total 記入。\n"
-            "盤面路徑照當前目錄解析，在倉庫根目錄用 uv run --project harness msbench <命令> 執行。"
+            "Settings live in harness/.env; see harness/.env.example.\n"
+            "MS_API_BASE is an API root ending in /v1. MS_MODEL is the model id. MS_API_KEY is the key.\n"
+            "A variable already set in the environment wins over the file.\n"
+            "MS_PROTOCOL is only recorded (instruct or thinking), default instruct.\n"
+            "Requests stream with no token cap; the model decides when to stop, and usage is taken from the response total.\n"
+            "Board paths resolve against the current directory. Run from the repo root with uv run --project harness msbench <command>."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
-    gold = sub.add_parser("gold", help="沿 gold 走完一張凍結盤面，確認引擎與檔案一致")
-    gold.add_argument("fixtures", nargs="+", metavar="board.json", help="msengine generate 寫出的盤面 JSON")
+    gold = sub.add_parser("gold", help="replay a frozen board along its gold path to confirm the engine and file agree")
+    gold.add_argument("fixtures", nargs="+", metavar="board.json", help="board JSON written by msengine generate")
     gold.add_argument("--binary", default=None)
 
     shared = argparse.ArgumentParser(add_help=False)
@@ -44,7 +44,7 @@ def main(argv: list[str] | None = None) -> int:
         "fixtures",
         nargs="+",
         metavar="board.json",
-        help="msengine generate 寫出的盤面 JSON",
+        help="board JSON written by msengine generate",
     )
     shared.add_argument("--out", default=None)
     shared.add_argument("--base", default=None)
@@ -57,10 +57,10 @@ def main(argv: list[str] | None = None) -> int:
     shared.add_argument("--track", default=None)
     shared.add_argument("--binary", default=None)
 
-    sub.add_parser("one-step", parents=[shared], help="沿 gold 路徑的每個位置問一次")
-    sub.add_parser("multi-step", parents=[shared], help="從開局下到第一次非必走")
+    sub.add_parser("one-step", parents=[shared], help="ask once at every position along the gold path")
+    sub.add_parser("multi-step", parents=[shared], help="play from the opening until the first non-forced move")
 
-    summary = sub.add_parser("summary", help="彙總 JSONL 紀錄")
+    summary = sub.add_parser("summary", help="summarize JSONL records")
     summary.add_argument("logs", nargs="+")
 
     args = parser.parse_args(argv)

@@ -9,15 +9,6 @@ from pathlib import Path
 from msbench.score import LABELS, LEGAL
 
 TIERS = ("single", "subset", "enumerate")
-TIER_NAMES = {"single": "單格", "subset": "子集", "enumerate": "枚舉"}
-CLASS_NAMES = {
-    "supported": "必走",
-    "lucky": "安全但推不出",
-    "mine": "踩雷",
-    "illegal": "非法",
-    "format": "格式",
-}
-BAND_NAMES = {"beginner": "初級", "intermediate": "中級", "other": "其他"}
 
 
 def load_jsonl(path: Path) -> list[dict]:
@@ -79,14 +70,6 @@ def percentile(values: list[float], p: float) -> float:
     return ordered[low] * (1 - weight) + ordered[high] * weight
 
 
-def size_band(record: dict) -> str:
-    if record.get("rows") == 9 and record.get("cols") == 9 and record.get("mines_total") == 10:
-        return "beginner"
-    if record.get("rows") == 16 and record.get("cols") == 16 and record.get("mines_total") == 40:
-        return "intermediate"
-    return "other"
-
-
 def _one_step(records: list[dict], *, draws: int, seed: int) -> dict:
     scheduled = [record for record in records if record.get("mode") == "one_step"]
     body = [record for record in scheduled if record.get("label") in LABELS]
@@ -99,7 +82,6 @@ def _one_step(records: list[dict], *, draws: int, seed: int) -> dict:
         "rates": _rates(counts, len(body)),
         "n_legal": counts["supported"] + counts["lucky"] + counts["mine"],
         "reasoning": _mean(scores),
-        "reasoning_pooled": _ratio(counts["supported"], counts["supported"] + counts["lucky"] + counts["mine"]),
         "reasoning_ci": bootstrap_mean(scores, draws=draws, seed=seed),
         "by_tier": {tier: _tier_slice([record for record in body if record.get("position_tier") == tier]) for tier in TIERS},
         "chance": _chance(body),
@@ -122,9 +104,6 @@ def _multi_step(records: list[dict], *, draws: int, seed: int) -> dict:
     scored = [episode for episode in episodes if not episode["transport"]]
     clears = [1.0 if episode["cleared"] else 0.0 for episode in scored]
     prefixes = [episode["prefix"] for episode in scored]
-    bands: dict[str, list[float]] = {}
-    for episode in scored:
-        bands.setdefault(episode["band"], []).append(episode["prefix"])
     labeled = [
         record
         for _key, steps in _episodes(records)
@@ -140,7 +119,6 @@ def _multi_step(records: list[dict], *, draws: int, seed: int) -> dict:
         "clear_rate": _mean(clears),
         "clear_ci": bootstrap_mean(clears, draws=draws, seed=seed),
         "prefix_mean": _mean(prefixes),
-        "prefix_by_band": {band: _mean(values) for band, values in bands.items()},
     }
 
 
@@ -215,7 +193,6 @@ def _score_episode(steps: list[dict]) -> dict:
         "transport": transport,
         "cleared": bool(steps) and steps[-1].get("stop_reason") == "cleared" and not transport,
         "prefix": prefix,
-        "band": size_band(steps[0]) if steps else "other",
     }
 
 
@@ -375,11 +352,11 @@ def _mean(values: list[float]) -> float | None:
 
 
 def render(report: dict) -> str:
-    lines = ["msbench 摘要"]
-    lines.append(f"模型: {_join(report['models'])}")
-    lines.append(f"協定: {_join(report['protocols'])}")
-    lines.append(f"軌道: {_join(report['tracks'])}")
-    lines.append(f"提示前綴 sha256: {_join(report['prompts'])}")
+    lines = ["msbench summary"]
+    lines.append(f"models: {_join(report['models'])}")
+    lines.append(f"protocol: {_join(report['protocols'])}")
+    lines.append(f"track: {_join(report['tracks'])}")
+    lines.append(f"prompt sha256: {_join(report['prompts'])}")
     lines.append("")
     lines.extend(_render_one_step(report["one_step"]))
     lines.append("")
@@ -391,101 +368,88 @@ def render(report: dict) -> str:
 
 def render_paired(stats: dict) -> str:
     if stats["mean"] is None:
-        return f"配對題數: {stats['n']}\n沒有兩邊都算得進推理率的題。\n"
+        return f"paired items: {stats['n']}\nno items scored on both sides.\n"
     return (
-        f"配對題數: {stats['n']}\n"
-        f"推理率差（第二份減第一份）: {_num(stats['mean'])}  "
-        f"95% 區間 [{_num(stats['low'])}, {_num(stats['high'])}]\n"
+        f"paired items: {stats['n']}\n"
+        f"reasoning rate diff (second minus first): {_num(stats['mean'])}  "
+        f"95% CI [{_num(stats['low'])}, {_num(stats['high'])}]\n"
     )
 
 
 def _render_one_step(block: dict) -> list[str]:
-    lines = [f"一步  有正文 {block['n']}  排程 {block['scheduled']}"]
+    lines = [f"one-step  scored {block['n']}  scheduled {block['scheduled']}"]
     if block["n"] == 0:
-        lines.append("沒有一步正文。")
+        lines.append("no scored one-step records.")
         return lines
     for label in LABELS:
         lines.append(
-            f"  {CLASS_NAMES[label]} {label:<10} {block['counts'][label]}/{block['n']}  {_num(block['rates'][label])}"
+            f"  {label:<10} {block['counts'][label]}/{block['n']}  {_num(block['rates'][label])}"
         )
-    lines.append(f"  五類合計 {_num(sum(rate for rate in block['rates'].values() if rate is not None))}")
     lines.append(
-        f"  推理率 {_num(block['reasoning'])}  {_ci(block['reasoning_ci'])}"
+        f"  reasoning rate {_num(block['reasoning'])}  {_ci(block['reasoning_ci'])}"
         f"  n={block['n']}  n_legal={block['n_legal']}"
     )
     for tier in TIERS:
         sliver = block["by_tier"][tier]
         lines.append(
-            f"  層級 {TIER_NAMES[tier]} {tier:<10} 推理率 {_num(sliver['reasoning'])}"
+            f"  tier {tier:<10} reasoning {_num(sliver['reasoning'])}"
             f"  n={sliver['n']}  n_legal={sliver['n_legal']}"
         )
-    lines.append(f"  機會基線（必走 open / 未開格，逐題平均） {_num(block['chance'])}")
+    lines.append(f"  chance baseline (forced opens / hidden cells, mean per item) {_num(block['chance'])}")
     return lines
 
 
 def _render_multi_step(block: dict) -> list[str]:
     lines = [
-        f"多步  計分局 {block['scored']}  傳輸失敗局 {block['transport']}  全部 {block['episodes']}"
+        f"multi-step  scored {block['scored']}  transport {block['transport']}  total {block['episodes']}"
     ]
     if block["episodes"] == 0:
-        lines.append("沒有多步紀錄。")
+        lines.append("no multi-step records.")
         return lines
-    lines.append(f"  通關率 {_num(block['clear_rate'])}  {_ci(block['clear_ci'])}")
+    lines.append(f"  clear rate {_num(block['clear_rate'])}  {_ci(block['clear_ci'])}")
     lines.append(
-        "  " + "  ".join(f"{CLASS_NAMES[label]} {block['counts'][label]}" for label in LABELS)
+        "  " + "  ".join(f"{label} {block['counts'][label]}" for label in LABELS)
     )
-    lines.append(f"  平均前綴 {_num(block['prefix_mean'])}")
-    for band in ("beginner", "intermediate", "other"):
-        if band not in block["prefix_by_band"]:
-            continue
-        lines.append(f"  {BAND_NAMES[band]}平均前綴 {_num(block['prefix_by_band'][band])}")
+    lines.append(f"  mean prefix {_num(block['prefix_mean'])}")
     return lines
 
 
 def _render_requests(block: dict) -> list[str]:
-    lines = ["請求"]
+    lines = ["requests"]
     lines.append(
-        f"  次數 {block['requests']}  重試 {block['retries']}  重試率 {_num(block['retry_rate'])}"
+        f"  calls {block['requests']}  retries {block['retries']}  retry rate {_num(block['retry_rate'])}"
     )
-    lines.append(f"  input tokens {_spread_text(block['input'])}")
-    lines.append(f"  output tokens {_spread_text(block['output'])}")
-    lines.append(f"  reasoning tokens {_spread_text(block['reasoning'])}")
-    lines.append(f"  總使用量 {_spread_text(block['total'])}")
-    latency = block["latency"]
     lines.append(
-        f"  延遲毫秒 中位數 {_num(latency['median'])}  P90 {_num(latency['p90'])}  n={latency['n']}"
+        "  tokens per request  "
+        f"output median {_num(block['output']['median'])}  "
+        f"reasoning median {_num(block['reasoning']['median'])}  "
+        f"total median {_num(block['total']['median'])}"
     )
     cost = block["episode_cost"]
     lines.append(
-        f"  多步每局 token 總和 中位數 {_num(cost['median'])}  總和 {_num(cost['sum'], 0)}  局數 {cost['n']}"
+        f"  multi-step episode tokens  median {_num(cost['median'])}  sum {_num(cost['sum'], 0)}  episodes {cost['n']}"
     )
     lines.append(
         f"  finish_reason=length {block['length']}/{block['body']}  "
-        f"其中格式失敗 {block['length_and_format']}  "
-        f"格式失敗共 {block['format']}"
+        f"format failures among them {block['length_and_format']}  "
+        f"format failures total {block['format']}"
     )
     return lines
 
 
-def _spread_text(spread: dict) -> str:
-    if spread["n"] == 0:
-        return "空"
-    return f"總和 {_num(spread['sum'], 0)}  中位數 {_num(spread['median'])}  IQR {_num(spread['iqr'])}  n={spread['n']}"
-
-
 def _ci(stats: dict | None) -> str:
     if stats is None:
-        return "95% 區間 空"
-    return f"95% 區間 [{_num(stats['low'])}, {_num(stats['high'])}]"
+        return "95% CI none"
+    return f"95% CI [{_num(stats['low'])}, {_num(stats['high'])}]"
 
 
 def _join(values: list) -> str:
     if not values:
-        return "空"
+        return "none"
     return ", ".join(str(value) for value in values)
 
 
 def _num(value, digits: int = 3) -> str:
     if value is None:
-        return "空"
+        return "none"
     return f"{value:.{digits}f}"

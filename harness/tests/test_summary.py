@@ -79,7 +79,6 @@ def test_five_rates_sum_to_one_and_reasoning_excludes_format_and_illegal():
     assert one["rates"]["supported"] == pytest.approx(0.2)
     assert one["n_legal"] == 3
     assert one["reasoning"] == pytest.approx(1 / 3)
-    assert one["reasoning_pooled"] == pytest.approx(1 / 3)
     assert one["reasoning_ci"]["low"] <= one["reasoning"] <= one["reasoning_ci"]["high"]
     assert one["by_tier"]["single"] == {"n": 2, "n_legal": 1, "reasoning": pytest.approx(1)}
     assert one["by_tier"]["subset"]["n"] == 2
@@ -103,9 +102,6 @@ def test_multi_step_clear_rate_and_prefix_skip_transport():
         "illegal": 0,
         "format": 0,
     }
-    assert multi_step["prefix_by_band"]["beginner"] == pytest.approx(2)
-    assert multi_step["prefix_by_band"]["intermediate"] == pytest.approx(0)
-    assert "other" not in multi_step["prefix_by_band"]
 
 
 def test_tokens_use_accepted_attempts_and_latency_uses_every_request():
@@ -169,7 +165,6 @@ def test_repeated_samples_are_averaged_within_the_item_first():
     records[3]["sample_index"] = 2
     one = analyze(records)["one_step"]
     assert one["reasoning"] == pytest.approx((1 + 1 / 3) / 2)
-    assert one["reasoning_pooled"] == pytest.approx(0.5)
 
 
 def test_bootstrap_is_stable_for_a_seed():
@@ -195,12 +190,11 @@ def test_paired_bootstrap_uses_items_present_on_both_sides():
 
 def test_summary_text_names_the_classes():
     text = summarize(sample_log(), draws=20)
-    assert "必走 supported" in text
+    assert "supported" in text
     assert "1/5  0.200" in text
-    assert "五類合計 1.000" in text
-    assert "推理率 0.333" in text
-    assert "通關率 0.500" in text
-    assert "平均前綴 1.000" in text
-    assert "初級平均前綴 2.000" in text
-    assert "機會基線" in text
-    assert "總使用量 總和 217" in text
+    assert "reasoning rate 0.333" in text
+    assert "clear rate 0.500" in text
+    assert "mean prefix 1.000" in text
+    assert "chance baseline" in text
+    assert "tokens per request  output median 5.500  reasoning median 4.000  total median 20.500" in text
+    assert "multi-step episode tokens  median 16.000  sum 32  episodes 2" in text
