@@ -4,6 +4,7 @@
 //! clicks. [`PlayerBoard`] is the only view a model is allowed to see.
 //! [`forced`] decides legal deductions from that view.
 
+mod batch;
 mod fixture;
 mod game;
 mod generate;
@@ -11,6 +12,10 @@ mod oracle;
 mod render;
 mod session;
 
+pub use batch::{
+    generate_batch, BatchError, BatchEvent, BatchReport, BatchRequest, Catalog, CatalogEntry,
+    Overwrite, SeedOutcome, CATALOG_KIND, EXHAUSTED_KIND,
+};
 pub use fixture::{replay, Fixture, GoldStep, ReplayError};
 pub use game::{
     Action, ActionKind, ApplyError, CellPos, Game, GameError, PlayerBoard, Status, Truth, Visible,
