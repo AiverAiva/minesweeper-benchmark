@@ -7,7 +7,7 @@ use std::io::{self, BufRead, Write};
 
 use serde_json::{json, Value};
 
-use crate::exact::exact;
+use crate::exact::{exact_limited, DEFAULT_NODE_LIMIT};
 use crate::fixture::Fixture;
 use crate::game::{Action, ActionKind, ApplyError, CellPos, Game, Visible};
 use crate::oracle::{forced, ForceError, ORACLE_VERSION};
@@ -38,7 +38,7 @@ pub fn handle_session_line(game: &mut Option<Game>, line: &str) -> Value {
         Some("new") => op_new(game, &value),
         Some("new_fixture") => op_new_fixture(game, &value),
         Some("forced") => op_forced(game),
-        Some("exact") => op_exact(game),
+        Some("exact") => op_exact(game, &value),
         Some("apply") => op_apply(game, &value),
         Some(other) => fail(Some(other), "parse", "unknown op".to_string(), None),
         None => fail(None, "parse", "missing op".to_string(), None),
@@ -177,7 +177,7 @@ fn op_forced(slot: &mut Option<Game>) -> Value {
     }
 }
 
-fn op_exact(slot: &mut Option<Game>) -> Value {
+fn op_exact(slot: &mut Option<Game>, value: &Value) -> Value {
     let Some(game) = slot else {
         return fail(
             Some("exact"),
@@ -186,16 +186,38 @@ fn op_exact(slot: &mut Option<Game>) -> Value {
             None,
         );
     };
-    match exact(game.player()) {
+    let limit = match value.get("node_limit") {
+        None => DEFAULT_NODE_LIMIT,
+        Some(raw) => match raw.as_u64() {
+            Some(limit) => limit,
+            None => {
+                return fail(
+                    Some("exact"),
+                    "parse",
+                    "node_limit must be an integer".to_string(),
+                    None,
+                )
+            }
+        },
+    };
+    match exact_limited(game.player(), limit) {
         Ok(judged) => {
             let cells: Vec<Value> = judged
                 .cells
                 .iter()
-                .map(|(cell, tier)| json!({"row": cell.row, "col": cell.col, "tier": tier}))
+                .map(|(cell, tier)| {
+                    let role = if judged.safe.contains(cell) {
+                        "safe"
+                    } else {
+                        "mine"
+                    };
+                    json!({"row": cell.row, "col": cell.col, "tier": tier, "role": role})
+                })
                 .collect();
             json!({
                 "ok": true,
                 "op": "exact",
+                "exact_status": judged.status,
                 "actions": judged.actions,
                 "cells": cells,
             })
@@ -315,8 +337,9 @@ fn fail(op: Option<&str>, error: &str, detail: String, cells: Option<usize>) -> 
 #[cfg(test)]
 mod tests {
     use super::handle_session_line;
-    use crate::game::Status;
+    use crate::game::{CellPos, Status};
     use crate::oracle::ORACLE_VERSION;
+    use serde_json::json;
 
     const NEW_TEXTBOOK: &str = r#"{"op":"new","rows":3,"cols":3,"mines":[{"row":1,"col":1},{"row":3,"col":3}],"first_click":{"row":1,"col":3}}"#;
 
@@ -433,6 +456,38 @@ mod tests {
             })
             .expect("open (3,1)");
         assert_eq!(open["tier"].as_str(), Some("enumerate"));
+        assert_eq!(judged["exact_status"].as_str(), Some("ok"));
+    }
+
+    #[test]
+    fn exact_reports_enum_limit_without_failing_the_op() {
+        // Row 6 stays hidden, so the opening flood does not win the game.
+        // Row 1 is still one frontier component wider than the enumerate cap,
+        // and the counts on row 2 force its flags in the single tier.
+        let cols = 60u32;
+        let mut mines: Vec<CellPos> = (1..=cols).map(|col| CellPos::new(1, col)).collect();
+        mines.extend((1..=cols).map(|col| CellPos::new(5, col)));
+        let mut game = None;
+        let request = json!({
+            "op": "new",
+            "rows": 6,
+            "cols": cols,
+            "mines": mines,
+            "first_click": {"row": 3, "col": 1},
+        });
+        let opened = handle_session_line(&mut game, &request.to_string());
+        assert_eq!(opened["ok"].as_bool(), Some(true), "{opened}");
+        let judged = handle_session_line(&mut game, r#"{"op":"exact"}"#);
+        assert_eq!(judged["ok"].as_bool(), Some(true), "{judged}");
+        assert_eq!(judged["exact_status"].as_str(), Some("enum_limit"));
+        assert!(judged["actions"].as_array().unwrap().is_empty());
+        let forced = handle_session_line(&mut game, r#"{"op":"forced"}"#);
+        assert_eq!(forced["ok"].as_bool(), Some(true), "{forced}");
+        assert!(forced["actions"].as_array().unwrap().iter().any(|action| {
+            action["kind"].as_str() == Some("flag")
+                && action["at"]["row"].as_u64() == Some(1)
+                && action["at"]["col"].as_u64() == Some(1)
+        }));
     }
 
     #[test]

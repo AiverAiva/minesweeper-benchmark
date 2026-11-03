@@ -19,7 +19,7 @@ pub use batch::{
     generate_batch, BatchError, BatchEvent, BatchReport, BatchRequest, Catalog, CatalogEntry,
     Overwrite, SeedOutcome, CATALOG_KIND, EXHAUSTED_KIND,
 };
-pub use exact::{exact, Exact, ExactAction};
+pub use exact::{exact, exact_limited, Exact, ExactAction, ExactStatus, DEFAULT_NODE_LIMIT};
 pub use fixture::{replay, Fixture, GoldStep, ReplayError};
 pub use game::{
     Action, ActionKind, ApplyError, CellPos, Game, GameError, PlayerBoard, Status, Truth, Visible,

@@ -13,6 +13,13 @@
 //! cell, then applies only the two global completions. This pass does not
 //! stop early, so a cell that is safe only because of the mine total is
 //! reported even when some other cell was already forced by a shallower rule.
+//!
+//! One frontier component wider than [`MAX_ENUM_CELLS`](crate::oracle::MAX_ENUM_CELLS),
+//! or a search that passes the node limit, abandons the whole position.
+//! The mine total couples every component, so a cell settled inside a small
+//! component can stop being settled once an unsearched component takes a
+//! different share of that total. A partial answer would disagree with the
+//! oracle fallback the scorer uses for that step.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -31,21 +38,51 @@ pub struct ExactAction {
     pub tier: Tier,
 }
 
+/// Why [`exact`] returned no cells. `Ok` is a finished search.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExactStatus {
+    Ok,
+    EnumLimit,
+    NodeLimit,
+}
+
 /// Safe cells, mine cells, and the actions those conclusions support.
+///
+/// `actions` and `cells` are empty unless `status` is [`ExactStatus::Ok`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Exact {
+    pub status: ExactStatus,
     pub safe: BTreeSet<CellPos>,
     pub mines: BTreeSet<CellPos>,
     pub actions: Vec<ExactAction>,
     pub cells: BTreeMap<CellPos, Tier>,
 }
 
+/// Search nodes visited while enumerating one run, across every component.
+///
+/// A node is one call of the backtracking search, including a call that
+/// propagation closes immediately. Past this, [`exact`] returns
+/// [`ExactStatus::NodeLimit`] instead of a partial layout set.
+pub const DEFAULT_NODE_LIMIT: u64 = 1_000_000;
+
 /// Cells decided by every mine layout that matches the visible board.
 pub fn exact(player: &PlayerBoard) -> Result<Exact, ForceError> {
+    exact_limited(player, DEFAULT_NODE_LIMIT)
+}
+
+/// [`exact`] with a caller-chosen node budget. `node_limit` of 0 stops at the
+/// first search node.
+pub fn exact_limited(player: &PlayerBoard, node_limit: u64) -> Result<Exact, ForceError> {
     if player.status() != Status::Playing {
         return Err(ForceError::Terminal);
     }
-    let (safe, mines) = decided_cells(player)?;
+    let (safe, mines) = match decided_cells(player, node_limit) {
+        Ok(found) => found,
+        Err(DecideError::EnumLimit) => return Ok(empty(ExactStatus::EnumLimit)),
+        Err(DecideError::NodeLimit) => return Ok(empty(ExactStatus::NodeLimit)),
+        Err(DecideError::Inconsistent) => return Err(ForceError::Inconsistent),
+    };
     let local = local_tiers(player)?;
     let mut cells = BTreeMap::new();
     for cell in safe.iter().chain(mines.iter()) {
@@ -54,11 +91,28 @@ pub fn exact(player: &PlayerBoard) -> Result<Exact, ForceError> {
     }
     let actions = supported_actions(player, &safe, &mines, &cells);
     Ok(Exact {
+        status: ExactStatus::Ok,
         safe,
         mines,
         actions,
         cells,
     })
+}
+
+fn empty(status: ExactStatus) -> Exact {
+    Exact {
+        status,
+        safe: BTreeSet::new(),
+        mines: BTreeSet::new(),
+        actions: Vec::new(),
+        cells: BTreeMap::new(),
+    }
+}
+
+enum DecideError {
+    EnumLimit,
+    NodeLimit,
+    Inconsistent,
 }
 
 /// Shallowest local tier that proves each cell, tried independently.
@@ -92,7 +146,8 @@ fn remember(
 
 fn decided_cells(
     player: &PlayerBoard,
-) -> Result<(BTreeSet<CellPos>, BTreeSet<CellPos>), ForceError> {
+    node_limit: u64,
+) -> Result<(BTreeSet<CellPos>, BTreeSet<CellPos>), DecideError> {
     let unknown = unknown_cells(player);
     let frontier: Vec<CellPos> = unknown
         .iter()
@@ -104,13 +159,18 @@ fn decided_cells(
         .copied()
         .filter(|cell| !touches_number(player, *cell))
         .collect();
-    let constraints = frontier_constraints(player, &frontier)?;
-    let parts = components(&frontier, &constraints)?;
+    let constraints =
+        frontier_constraints(player, &frontier).map_err(|_| DecideError::Inconsistent)?;
+    let mut budget = Budget {
+        nodes: 0,
+        limit: node_limit,
+    };
+    let parts = components(&frontier, &constraints, &mut budget)?;
     let total = player.mines_total();
     let interior_n = interior.len() as u32;
     let feasible = feasible_totals(&parts, total, interior_n);
     if feasible.is_empty() {
-        return Err(ForceError::Inconsistent);
+        return Err(DecideError::Inconsistent);
     }
 
     let mut safe = BTreeSet::new();
@@ -132,7 +192,7 @@ fn decided_cells(
                     safe.insert(*cell);
                 }
                 (true, true) => {}
-                (false, false) => return Err(ForceError::Inconsistent),
+                (false, false) => return Err(DecideError::Inconsistent),
             }
         }
     }
@@ -158,6 +218,11 @@ struct Part {
     possible_k: BTreeSet<u32>,
     mine_ks: Vec<BTreeSet<u32>>,
     safe_ks: Vec<BTreeSet<u32>>,
+}
+
+struct Budget {
+    nodes: u64,
+    limit: u64,
 }
 
 fn frontier_constraints(
@@ -201,7 +266,11 @@ fn frontier_constraints(
     Ok(constraints)
 }
 
-fn components(frontier: &[CellPos], constraints: &[Constraint]) -> Result<Vec<Part>, ForceError> {
+fn components(
+    frontier: &[CellPos],
+    constraints: &[Constraint],
+    budget: &mut Budget,
+) -> Result<Vec<Part>, DecideError> {
     let mut parent: Vec<usize> = (0..frontier.len()).collect();
     for constraint in constraints {
         if let Some(first) = constraint.cells.first().copied() {
@@ -221,7 +290,7 @@ fn components(frontier: &[CellPos], constraints: &[Constraint]) -> Result<Vec<Pa
     let mut parts = Vec::new();
     for group in groups.into_values() {
         if group.len() > MAX_ENUM_CELLS {
-            return Err(ForceError::EnumLimit { cells: group.len() });
+            return Err(DecideError::EnumLimit);
         }
         let mut local_of = vec![None; frontier.len()];
         for (local, global) in group.iter().copied().enumerate() {
@@ -250,15 +319,18 @@ fn components(frontier: &[CellPos], constraints: &[Constraint]) -> Result<Vec<Pa
         let mut mine_ks = vec![BTreeSet::new(); n];
         let mut safe_ks = vec![BTreeSet::new(); n];
         let mut assign = vec![None; n];
+        let mut trail = Vec::new();
         search(
             &local_constraints,
             &mut assign,
+            &mut trail,
+            budget,
             &mut possible_k,
             &mut mine_ks,
             &mut safe_ks,
-        );
+        )?;
         if possible_k.is_empty() {
-            return Err(ForceError::Inconsistent);
+            return Err(DecideError::Inconsistent);
         }
         parts.push(Part {
             cells: group.iter().map(|global| frontier[*global]).collect(),
@@ -273,34 +345,66 @@ fn components(frontier: &[CellPos], constraints: &[Constraint]) -> Result<Vec<Pa
 fn search(
     constraints: &[Constraint],
     assign: &mut [Option<bool>],
+    trail: &mut Vec<usize>,
+    budget: &mut Budget,
     possible_k: &mut BTreeSet<u32>,
     mine_ks: &mut [BTreeSet<u32>],
     safe_ks: &mut [BTreeSet<u32>],
-) {
-    if !propagate(constraints, assign) {
-        return;
+) -> Result<(), DecideError> {
+    budget.nodes += 1;
+    if budget.nodes > budget.limit {
+        return Err(DecideError::NodeLimit);
     }
-    let Some(index) = assign.iter().position(Option::is_none) else {
-        let k = assign.iter().filter(|cell| **cell == Some(true)).count() as u32;
-        possible_k.insert(k);
-        for (at, cell) in assign.iter().enumerate() {
-            if *cell == Some(true) {
-                mine_ks[at].insert(k);
-            } else {
-                safe_ks[at].insert(k);
-            }
+    let mark = trail.len();
+    if !propagate(constraints, assign, trail) {
+        undo(assign, trail, mark);
+        return Ok(());
+    }
+    if let Some(index) = assign.iter().position(|cell| cell.is_none()) {
+        for value in [false, true] {
+            assign[index] = Some(value);
+            search(
+                constraints,
+                assign,
+                trail,
+                budget,
+                possible_k,
+                mine_ks,
+                safe_ks,
+            )?;
+            assign[index] = None;
         }
-        return;
-    };
-    for value in [Some(false), Some(true)] {
-        let mut next = assign.to_vec();
-        next[index] = value;
-        search(constraints, &mut next, possible_k, mine_ks, safe_ks);
+        undo(assign, trail, mark);
+        return Ok(());
+    }
+    let k = assign.iter().filter(|cell| **cell == Some(true)).count() as u32;
+    possible_k.insert(k);
+    for (at, cell) in assign.iter().enumerate() {
+        if *cell == Some(true) {
+            mine_ks[at].insert(k);
+        } else {
+            safe_ks[at].insert(k);
+        }
+    }
+    undo(assign, trail, mark);
+    Ok(())
+}
+
+fn undo(assign: &mut [Option<bool>], trail: &mut Vec<usize>, mark: usize) {
+    while trail.len() > mark {
+        let cell = trail.pop().expect("trail mark stays within the trail");
+        assign[cell] = None;
     }
 }
 
 /// Fill cells that every remaining assignment of one constraint agrees on.
-fn propagate(constraints: &[Constraint], assign: &mut [Option<bool>]) -> bool {
+///
+/// Cells written here are pushed on `trail` so the caller can put them back.
+fn propagate(
+    constraints: &[Constraint],
+    assign: &mut [Option<bool>],
+    trail: &mut Vec<usize>,
+) -> bool {
     let mut changed = true;
     while changed {
         changed = false;
@@ -325,11 +429,13 @@ fn propagate(constraints: &[Constraint], assign: &mut [Option<bool>]) -> bool {
             if mines == constraint.need {
                 for cell in free {
                     assign[cell] = Some(false);
+                    trail.push(cell);
                 }
                 changed = true;
             } else if usize::from(mines) + free.len() == usize::from(constraint.need) {
                 for cell in free {
                     assign[cell] = Some(true);
+                    trail.push(cell);
                 }
                 changed = true;
             }
@@ -425,9 +531,9 @@ fn touches_number(player: &PlayerBoard, cell: CellPos) -> bool {
         })
 }
 
-/// Opens of hidden safe cells, flags of hidden mines, and chords whose
-/// hidden neighbors are all safe. A flag already on the board is not undone:
-/// removing a mark is not a supported action.
+/// Opens of hidden safe cells, flags of hidden mines, removal of a flag that
+/// sits on a safe cell, and chords whose hidden neighbors are all safe.
+/// Taking a flag off a proved mine is not listed: that move is a misflag.
 fn supported_actions(
     player: &PlayerBoard,
     safe: &BTreeSet<CellPos>,
@@ -436,8 +542,10 @@ fn supported_actions(
 ) -> Vec<ExactAction> {
     let mut actions = Vec::new();
     for cell in safe {
-        if matches!(player.get(cell.row, cell.col), Some(Visible::Hidden)) {
-            actions.push(scored(ActionKind::Open, *cell, cells));
+        match player.get(cell.row, cell.col) {
+            Some(Visible::Hidden) => actions.push(scored(ActionKind::Open, *cell, cells)),
+            Some(Visible::Flag) => actions.push(scored(ActionKind::Flag, *cell, cells)),
+            _ => {}
         }
     }
     for cell in mines {
@@ -503,6 +611,7 @@ fn chord_tier(
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
+    use std::time::Instant;
 
     use rand::rngs::StdRng;
     use rand::{Rng, SeedableRng};
@@ -544,15 +653,30 @@ mod tests {
     }
 
     #[test]
-    fn a_proven_safe_flag_is_not_an_unflag_action() {
+    fn removing_a_flag_from_a_safe_cell_is_supported() {
         let mut board = visible_board(&["#1..", "11..", "....", "...F"]);
         board.set_mines_total(1);
         let judged = exact(&board).unwrap();
+        assert_eq!(judged.status, ExactStatus::Ok);
         assert!(judged.safe.contains(&CellPos::new(4, 4)));
+        let unflag = judged
+            .actions
+            .iter()
+            .find(|action| action.kind == ActionKind::Flag && action.at == CellPos::new(4, 4))
+            .expect("unflag (4,4)");
+        assert_eq!(unflag.tier, Tier::Single);
+    }
+
+    #[test]
+    fn a_flag_on_a_proved_mine_is_not_listed_for_removal() {
+        let mut board = visible_board(&["F1..", "11..", "....", "####", "####"]);
+        board.set_mines_total(1);
+        let judged = exact(&board).unwrap();
+        assert!(judged.mines.contains(&CellPos::new(1, 1)));
         assert!(!judged
             .actions
             .iter()
-            .any(|action| { action.at == CellPos::new(4, 4) }));
+            .any(|action| action.at == CellPos::new(1, 1)));
     }
 
     #[test]
@@ -588,20 +712,49 @@ mod tests {
     }
 
     #[test]
-    fn a_frontier_wider_than_the_cap_is_rejected() {
-        let cols = 30;
-        let mut cells = Vec::with_capacity(3);
-        cells.push(vec![Visible::Hidden; cols]);
-        let mut middle = vec![Visible::Number(2); cols];
-        middle[0] = Visible::Number(1);
-        middle[cols - 1] = Visible::Number(1);
-        cells.push(middle);
-        cells.push(vec![Visible::Hidden; cols]);
-        let board = PlayerBoard::from_visible(cells);
-        match exact(&board) {
-            Err(ForceError::EnumLimit { cells }) => assert!(cells > MAX_ENUM_CELLS),
-            other => panic!("expected enum limit, got {other:?}"),
-        }
+    fn a_frontier_wider_than_the_cap_falls_back_without_cells() {
+        let board = wide_frontier();
+        let judged = exact(&board).unwrap();
+        assert_eq!(judged.status, ExactStatus::EnumLimit);
+        assert!(judged.actions.is_empty());
+        assert!(judged.cells.is_empty());
+        let early = forced(&board);
+        assert!(matches!(early, Err(ForceError::EnumLimit { .. })));
+    }
+
+    #[test]
+    fn a_wide_frontier_keeps_the_oracle_when_a_shallow_force_exists() {
+        // Sixty hidden cells share the opened counts under them, so they are
+        // one component past the cap. Each count equals its unknown neighbors,
+        // so forced() still flags them from the single-cell tier and returns
+        // before enumeration.
+        let cols = 60;
+        let mut numbers = vec![Visible::Number(3); cols];
+        numbers[0] = Visible::Number(2);
+        numbers[cols - 1] = Visible::Number(2);
+        let mut board = PlayerBoard::from_visible(vec![
+            vec![Visible::Hidden; cols],
+            numbers,
+            vec![Visible::Number(0); cols],
+        ]);
+        board.set_mines_total(cols as u32);
+        let early = forced(&board).unwrap();
+        assert_eq!(early.tier, Some(Tier::Single));
+        assert!(early.actions.contains(&Action::flag(1, 1)));
+        let judged = exact(&board).unwrap();
+        assert_eq!(judged.status, ExactStatus::EnumLimit);
+        assert!(judged.actions.is_empty());
+    }
+
+    #[test]
+    fn a_zero_node_budget_stops_before_a_layout_is_recorded() {
+        let mut game = Game::from_mines(3, 3, &[CellPos::new(1, 1), CellPos::new(3, 3)]).unwrap();
+        game.apply(Action::open(1, 3)).unwrap();
+        let judged = exact_limited(game.player(), 0).unwrap();
+        assert_eq!(judged.status, ExactStatus::NodeLimit);
+        assert!(judged.actions.is_empty());
+        let early = forced(game.player()).unwrap();
+        assert!(early.actions.contains(&Action::open(3, 1)));
     }
 
     #[test]
@@ -660,6 +813,86 @@ mod tests {
         );
     }
 
+    /// Random mid-games at intermediate and expert size. Not part of `cargo test`.
+    /// Run with `cargo test -p minesweeper-engine -- --ignored stress_exact --nocapture`.
+    #[test]
+    #[ignore]
+    fn stress_exact_on_random_intermediate_and_expert_midgames() {
+        let mut rng = StdRng::seed_from_u64(2026_11_03);
+        report_stress(&mut rng, "intermediate", 16, 16, 40, 12);
+        report_stress(&mut rng, "expert", 16, 30, 99, 8);
+    }
+
+    fn report_stress(
+        rng: &mut StdRng,
+        name: &str,
+        rows: u32,
+        cols: u32,
+        mines: usize,
+        games: usize,
+    ) {
+        let mut ok = 0u32;
+        let mut enum_limit = 0u32;
+        let mut node_limit = 0u32;
+        let mut inconsistent = 0u32;
+        let mut slowest = 0u128;
+        let mut played = 0u32;
+        for _game in 0..games {
+            let Some(mut game) = random_game(rng, rows, cols, mines) else {
+                continue;
+            };
+            for extra in [0usize, 15, 40] {
+                if extra > 0 {
+                    open_safe(&mut game, rng, extra);
+                }
+                if game.player().status() != Status::Playing {
+                    break;
+                }
+                let started = Instant::now();
+                match exact(game.player()) {
+                    Ok(judged) => match judged.status {
+                        ExactStatus::Ok => ok += 1,
+                        ExactStatus::EnumLimit => enum_limit += 1,
+                        ExactStatus::NodeLimit => node_limit += 1,
+                    },
+                    Err(ForceError::Inconsistent) => inconsistent += 1,
+                    Err(error) => panic!("{name} exact failed: {error}"),
+                }
+                slowest = slowest.max(started.elapsed().as_millis());
+                played += 1;
+            }
+        }
+        let total = ok + enum_limit + node_limit + inconsistent;
+        println!(
+            "{name} positions={total} ok={ok} enum_limit={enum_limit} ({:.1}%) node_limit={node_limit} ({:.1}%) inconsistent={inconsistent} slowest_ms={slowest}",
+            percent(enum_limit, total),
+            percent(node_limit, total),
+        );
+        assert!(played > 0, "{name} produced no positions");
+    }
+
+    fn open_safe(game: &mut Game, rng: &mut StdRng, count: usize) {
+        for _step in 0..count {
+            if game.player().status() != Status::Playing {
+                break;
+            }
+            let safe = hidden_safe(game);
+            if safe.is_empty() {
+                break;
+            }
+            let cell = safe[rng.gen_range(0..safe.len())];
+            game.apply(Action::open(cell.row, cell.col)).unwrap();
+        }
+    }
+
+    fn percent(part: u32, whole: u32) -> f64 {
+        if whole == 0 {
+            0.0
+        } else {
+            f64::from(part) * 100.0 / f64::from(whole)
+        }
+    }
+
     fn compare_while_small(game: &mut Game, rng: &mut StdRng, extra: usize) -> u32 {
         let mut checked = 0u32;
         if game.player().status() == Status::Playing && brute_can_run(game.player()) {
@@ -703,6 +936,7 @@ mod tests {
 
     fn assert_same(player: &PlayerBoard) {
         let judged = exact(player).expect("exact layout");
+        assert_eq!(judged.status, ExactStatus::Ok);
         let (safe, mines) = brute(player).expect("brute layout");
         assert_eq!(judged.safe, safe);
         assert_eq!(judged.mines, mines);
@@ -883,6 +1117,23 @@ mod tests {
             total = total.checked_mul((n - i) as u64)? / (i as u64 + 1);
         }
         Some(total)
+    }
+
+    fn wide_frontier() -> PlayerBoard {
+        wide_numbered_row(30)
+    }
+
+    /// Hidden row, a line of 2s with 1s at the ends, hidden row. No single-cell
+    /// or subset deduction, and both hidden rows are one component.
+    fn wide_numbered_row(cols: usize) -> PlayerBoard {
+        let mut cells = Vec::with_capacity(3);
+        cells.push(vec![Visible::Hidden; cols]);
+        let mut middle = vec![Visible::Number(2); cols];
+        middle[0] = Visible::Number(1);
+        middle[cols - 1] = Visible::Number(1);
+        cells.push(middle);
+        cells.push(vec![Visible::Hidden; cols]);
+        PlayerBoard::from_visible(cells)
     }
 
     fn visible_board(rows: &[&str]) -> PlayerBoard {
