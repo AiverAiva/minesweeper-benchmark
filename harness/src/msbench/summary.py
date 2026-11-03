@@ -8,7 +8,7 @@ from pathlib import Path
 
 from msbench.score import LABELS, LEGAL
 
-TIERS = ("single", "subset", "enumerate")
+TIERS = ("single", "subset", "enumerate", "global")
 
 
 def load_jsonl(path: Path) -> list[dict]:
@@ -80,10 +80,13 @@ def _one_step(records: list[dict], *, draws: int, seed: int) -> dict:
         "n": len(body),
         "counts": counts,
         "rates": _rates(counts, len(body)),
-        "n_legal": counts["supported"] + counts["lucky"] + counts["mine"],
+        "n_legal": _n_legal(counts),
         "reasoning": _mean(scores),
         "reasoning_ci": bootstrap_mean(scores, draws=draws, seed=seed),
-        "by_tier": {tier: _tier_slice([record for record in body if record.get("position_tier") == tier]) for tier in TIERS},
+        "by_tier": {
+            tier: _tier_slice([record for record in body if _difficulty_tier(record) == tier])
+            for tier in TIERS
+        },
         "chance": _chance(body),
         "transport_rate": _ratio(len(scheduled) - len(body), len(scheduled)),
     }
@@ -91,7 +94,7 @@ def _one_step(records: list[dict], *, draws: int, seed: int) -> dict:
 
 def _tier_slice(records: list[dict]) -> dict:
     counts = _counts(records)
-    legal = counts["supported"] + counts["lucky"] + counts["mine"]
+    legal = _n_legal(counts)
     return {
         "n": len(records),
         "n_legal": legal,
@@ -245,7 +248,7 @@ def _chance(records: list[dict]) -> float | None:
         for record in samples:
             hidden = record.get("hidden_count") or 0
             if hidden:
-                sample_ratios.append((record.get("forced_open_count") or 0) / hidden)
+                sample_ratios.append(_safe_opens(record) / hidden)
         if sample_ratios:
             ratios.append(sum(sample_ratios) / len(sample_ratios))
     return _mean(ratios)
@@ -274,6 +277,23 @@ def _item_groups(records: list[dict]) -> dict[str, list[dict]]:
     for record in records:
         groups.setdefault(str(record.get("item_id")), []).append(record)
     return groups
+
+
+def _n_legal(counts: dict[str, int]) -> int:
+    return sum(counts[label] for label in LEGAL)
+
+
+def _difficulty_tier(record: dict):
+    """Cell tier when the log has one. Older logs only stored the position tier."""
+    if "tier_needed" in record:
+        return record.get("tier_needed")
+    return record.get("position_tier")
+
+
+def _safe_opens(record: dict) -> float:
+    if "exact_open_count" in record:
+        return record.get("exact_open_count") or 0
+    return record.get("forced_open_count") or 0
 
 
 def _counts(records: list[dict]) -> dict[str, int]:
@@ -410,7 +430,7 @@ def _render_one_step(block: dict) -> list[str]:
             f"  tier {tier:<10} reasoning {_num(sliver['reasoning'])}"
             f"  n={sliver['n']}  n_legal={sliver['n_legal']}"
         )
-    lines.append(f"  chance baseline (forced opens / hidden cells, mean per item) {_num(block['chance'])}")
+    lines.append(f"  chance baseline (safe opens / hidden cells, mean per item) {_num(block['chance'])}")
     return lines
 
 

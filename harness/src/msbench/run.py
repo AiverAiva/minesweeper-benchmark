@@ -415,7 +415,7 @@ def ask(
         record["position_tier"] = record["forced_tier"]
     if completion.transport_error:
         return record
-    record.update(classify(session, completion.action, judged))
+    record.update(classify(session, completion.action, judged, session.exact()))
     return record
 
 

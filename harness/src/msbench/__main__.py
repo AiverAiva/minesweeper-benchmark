@@ -13,6 +13,7 @@ from pathlib import Path
 from msbench.client import FatalApiError
 from msbench.config import ConfigError, load_settings
 from msbench.engine import EngineError
+from msbench.rescore import rescore_logs
 from msbench.run import check_gold, continue_log, run_paths
 from msbench.score import GoldError
 from msbench.summary import load_jsonl, render_paired, paired_bootstrap, summarize
@@ -86,6 +87,21 @@ def main(argv: list[str] | None = None) -> int:
     summary = sub.add_parser("summary", help="summarize JSONL records")
     summary.add_argument("logs", nargs="+")
 
+    rescore = sub.add_parser(
+        "rescore",
+        help="relabel a JSONL log with the exact mine-count rules, without calling a model",
+    )
+    rescore.add_argument("logs", nargs="+", metavar="run.jsonl")
+    rescore.add_argument(
+        "--fixture",
+        action="append",
+        default=[],
+        dest="fixture_hints",
+        metavar="board.json",
+        help="board JSON for a log whose fixture is not at runs/{name}.json",
+    )
+    rescore.add_argument("--binary", default=None)
+
     args = parser.parse_args(argv)
     try:
         if args.command == "gold":
@@ -93,6 +109,8 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "summary":
             return _summary([Path(path) for path in args.logs])
+        if args.command == "rescore":
+            return _rescore(args)
         settings = load_settings(args)
         if args.command == "continue":
             return _continue(args, settings)
@@ -131,6 +149,15 @@ def _continue(args, settings) -> int:
         collected.extend(records)
         print(f"wrote {destination}  records={len(records)}")
     print(summarize(collected), end="")
+    return 0
+
+
+def _rescore(args) -> int:
+    hints = [Path(path) for path in args.fixture_hints]
+    print(
+        rescore_logs([Path(path) for path in args.logs], hints, args.binary),
+        end="",
+    )
     return 0
 
 

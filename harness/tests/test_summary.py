@@ -125,6 +125,7 @@ def test_multi_step_clear_rate_and_prefix_skip_transport():
         "supported": 2,
         "lucky": 1,
         "mine": 0,
+        "misflag": 0,
         "illegal": 0,
         "format": 0,
     }

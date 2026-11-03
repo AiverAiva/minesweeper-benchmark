@@ -94,6 +94,9 @@ class EngineSession:
     def forced(self) -> dict:
         return self._checked({"op": "forced"})
 
+    def exact(self) -> dict:
+        return self._checked({"op": "exact"})
+
     def apply(self, action: dict) -> dict:
         return self._checked({"op": "apply", "action": action})
 

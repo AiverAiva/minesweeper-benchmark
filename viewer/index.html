@@ -678,6 +678,7 @@
       supported: { name: "Supported", tone: "green" },
       lucky: { name: "Lucky", tone: "yellow" },
       mine: { name: "Mine", tone: "red" },
+      misflag: { name: "Misflag", tone: "red" },
       illegal: { name: "Illegal", tone: "red" },
       format: { name: "Format", tone: "blue" },
     };
@@ -691,6 +692,7 @@
       supported: "Supported",
       lucky: "Lucky",
       mine: "Mine",
+      misflag: "Misflag",
       illegal: "Illegal",
       format: "Format",
     };
@@ -702,7 +704,8 @@
       "item_id", "episode_id", "fixture", "seed", "rows", "cols", "mines_total", "bbbv",
       "position_tier", "step_index", "sample_index", "mode", "prompt_sha256",
       "board_text", "response_text", "reasoning_text", "label", "action", "forced_tier", "forced_actions",
-      "forced_count", "forced_open_count", "hidden_count", "status_after", "text_after",
+      "forced_count", "forced_open_count", "exact_actions", "exact_open_count", "tier_needed",
+      "hidden_count", "status_after", "text_after",
       "stop_reason", "detail", "transport_error", "attempts",
     ]);
 
@@ -841,6 +844,11 @@
         cols: Number(meta.cols) || Math.max(...grid.map((row) => row.cells.length)),
         grid,
       };
+    }
+
+    function supportActions(record) {
+      if (Array.isArray(record.exact_actions)) return record.exact_actions;
+      return Array.isArray(record.forced_actions) ? record.forced_actions : [];
     }
 
     function forcedMap(actions) {
@@ -1052,7 +1060,7 @@
         wrap.append(el("p", { class: "quiet", text: "This record has no board text." }));
         return wrap;
       }
-      const forced = forcedMap(record.forced_actions);
+      const forced = forcedMap(supportActions(record));
       const chosen = record.action && record.action.at
         ? cellKey(record.action.at.row, record.action.at.col)
         : null;
@@ -1067,8 +1075,8 @@
 
     function buildForced(record) {
       const section = el("section");
-      section.append(el("h2", { text: "Forced set" }));
-      const actions = Array.isArray(record.forced_actions) ? record.forced_actions : [];
+      section.append(el("h2", { text: Array.isArray(record.exact_actions) ? "Supported set" : "Forced set" }));
+      const actions = supportActions(record);
       const tier = record.forced_tier;
       const bits = [];
       bits.push(plural(actions.length, "move", "moves"));
