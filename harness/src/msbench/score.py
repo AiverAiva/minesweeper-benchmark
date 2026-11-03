@@ -1,8 +1,10 @@
 """Six-way label for one model reply.
 
 Order: exactly one tool call, engine rejection, a lost game, a flag placed on
-a cell that is not a mine, membership in the exact safe or mine set, then
-lucky. The tiered oracle is stored beside the label and does not decide it.
+a cell that is not a mine, an unflag of a proved mine, membership in the exact
+safe or mine set, then lucky. Removing a flag from a proved safe cell is
+supported. The tiered oracle is stored beside the label. It decides the label
+only when the exact judge reports enum_limit or node_limit.
 """
 
 from __future__ import annotations
@@ -26,29 +28,31 @@ def hidden_count(board_text: str) -> int:
     return sum(line.count("#") for line in lines[start:])
 
 
+def prefetch(session: EngineSession) -> tuple[dict, dict]:
+    """Oracle set and exact judge for the current board, before a model call."""
+    return _forced_view(session, None), _exact_view(session, None)
+
+
 def classify(
     session: EngineSession,
     action: dict | None,
     judged: dict | None = None,
     proven: dict | None = None,
 ) -> dict:
-    if judged is None:
-        judged = session.forced()
-    if proven is None:
-        proven = session.exact()
-    actions = judged.get("actions")
-    if not isinstance(actions, list):
-        raise EngineError("protocol", "engine forced response has no actions list")
-    exact_actions = proven.get("actions")
-    if not isinstance(exact_actions, list):
-        raise EngineError("protocol", "engine exact response has no actions list")
+    judged = _forced_view(session, judged)
+    proven = _exact_view(session, proven)
+    actions = judged.get("actions") or []
+    exact_actions = proven.get("actions") or []
+    status = proven.get("exact_status") or "ok"
+    support = exact_actions if status == "ok" else actions
     outcome = {
         "forced_tier": judged.get("tier"),
         "forced_actions": actions,
         "forced_count": len(actions),
-        "forced_open_count": sum(1 for item in actions if item.get("kind") == "open"),
+        "forced_open_count": _open_count(actions),
+        "exact_status": status,
         "exact_actions": exact_actions,
-        "exact_open_count": sum(1 for item in exact_actions if item.get("kind") == "open"),
+        "exact_open_count": _open_count(exact_actions) if status == "ok" else _open_count(actions),
         "tier_needed": tier_needed(proven, action),
         "action": None,
         "status_after": None,
@@ -59,10 +63,10 @@ def classify(
     if action is None:
         return outcome
     outcome["action"] = action
-    supported = _is_supported(exact_actions, action)
+    supported = _is_supported(support, action)
     applied = session.apply(action)
     if not applied.get("ok"):
-        if supported:
+        if supported and status == "ok":
             raise EngineError(
                 str(applied.get("error") or "apply"),
                 f"exact action failed to apply: {applied.get('detail') or action}",
@@ -77,28 +81,79 @@ def classify(
     if applied.get("status") == "lost":
         outcome["label"] = "mine"
         return outcome
-    placed_flag = action.get("kind") == "flag" and applied.get("flag_placed")
+    placed_flag = action.get("kind") == "flag" and applied.get("flag_placed") is True
     if placed_flag and not applied.get("cell_is_mine"):
         outcome["label"] = "misflag"
+        return outcome
+    removed_flag = action.get("kind") == "flag" and applied.get("flag_placed") is False
+    if removed_flag:
+        if supported:
+            outcome["label"] = "supported"
+        elif _role(proven, action) == "mine":
+            outcome["label"] = "misflag"
+        else:
+            outcome["label"] = "lucky"
         return outcome
     outcome["label"] = "supported" if supported else "lucky"
     return outcome
 
 
 def tier_needed(proven: dict, action: dict | None) -> str | None:
-    """Shallowest tier that proves the chosen cell, or None when it is not proved."""
-    if not action:
+    """Tier of a proved open, a proved flag, or a proved chord.
+
+    Any other move, including an open of a mine and a flag on a safe cell,
+    has no tier. A chord's tier is the deepest tier among the cells it opens.
+    """
+    if not action or (proven.get("exact_status") or "ok") != "ok":
         return None
     wanted = _action_key(action)
-    for item in proven.get("actions") or []:
-        if _action_key(item) == wanted and item.get("tier"):
-            return item.get("tier")
-    if action.get("kind") not in ("open", "flag"):
+    match = next(
+        (item for item in proven.get("actions") or [] if _action_key(item) == wanted and item.get("tier")),
+        None,
+    )
+    if match is None:
         return None
+    kind = action.get("kind")
+    if kind in ("open", "chord"):
+        return match.get("tier")
+    if kind == "flag" and _role(proven, action) == "mine":
+        return match.get("tier")
+    return None
+
+
+def _forced_view(session: EngineSession, judged: dict | None) -> dict:
+    if judged is None:
+        try:
+            judged = session.forced()
+        except EngineError as error:
+            if error.error != "enum_limit":
+                raise
+            judged = {"tier": None, "actions": [], "error": "enum_limit"}
+    if not isinstance(judged.get("actions"), list):
+        raise EngineError("protocol", "engine forced response has no actions list")
+    return judged
+
+
+def _exact_view(session: EngineSession, proven: dict | None) -> dict:
+    if proven is None:
+        proven = session.exact()
+    if not isinstance(proven.get("actions"), list):
+        raise EngineError("protocol", "engine exact response has no actions list")
+    status = proven.get("exact_status") or "ok"
+    if status not in ("ok", "enum_limit", "node_limit"):
+        raise EngineError("protocol", f"unknown exact_status {status}")
+    return proven
+
+
+def _open_count(actions: list) -> int:
+    return sum(1 for item in actions if item.get("kind") == "open")
+
+
+def _role(proven: dict, action: dict) -> str | None:
     at = action.get("at") or {}
     for cell in proven.get("cells") or []:
         if cell.get("row") == at.get("row") and cell.get("col") == at.get("col"):
-            return cell.get("tier")
+            return cell.get("role")
     return None
 
 

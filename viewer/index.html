@@ -704,7 +704,7 @@
       "item_id", "episode_id", "fixture", "seed", "rows", "cols", "mines_total", "bbbv",
       "position_tier", "step_index", "sample_index", "mode", "prompt_sha256",
       "board_text", "response_text", "reasoning_text", "label", "action", "forced_tier", "forced_actions",
-      "forced_count", "forced_open_count", "exact_actions", "exact_open_count", "tier_needed",
+      "forced_count", "forced_open_count", "exact_status", "exact_actions", "exact_open_count", "tier_needed",
       "hidden_count", "status_after", "text_after",
       "stop_reason", "detail", "transport_error", "attempts",
     ]);
@@ -847,6 +847,9 @@
     }
 
     function supportActions(record) {
+      if (record.exact_status === "enum_limit" || record.exact_status === "node_limit") {
+        return Array.isArray(record.forced_actions) ? record.forced_actions : [];
+      }
       if (Array.isArray(record.exact_actions)) return record.exact_actions;
       return Array.isArray(record.forced_actions) ? record.forced_actions : [];
     }
@@ -1075,7 +1078,10 @@
 
     function buildForced(record) {
       const section = el("section");
-      section.append(el("h2", { text: Array.isArray(record.exact_actions) ? "Supported set" : "Forced set" }));
+      const exactReady = Array.isArray(record.exact_actions)
+        && record.exact_status !== "enum_limit"
+        && record.exact_status !== "node_limit";
+      section.append(el("h2", { text: exactReady ? "Supported set" : "Forced set" }));
       const actions = supportActions(record);
       const tier = record.forced_tier;
       const bits = [];

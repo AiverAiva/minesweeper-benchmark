@@ -84,9 +84,12 @@ def _one_step(records: list[dict], *, draws: int, seed: int) -> dict:
         "reasoning": _mean(scores),
         "reasoning_ci": bootstrap_mean(scores, draws=draws, seed=seed),
         "by_tier": {
-            tier: _tier_slice([record for record in body if _difficulty_tier(record) == tier])
+            tier: _tier_slice([record for record in body if _position_tier(record) == tier])
             for tier in TIERS
         },
+        "tier_needed": _supported_tiers(body),
+        "enum_limit": _status_count(body, "enum_limit"),
+        "node_limit": _status_count(body, "node_limit"),
         "chance": _chance(body),
         "transport_rate": _ratio(len(scheduled) - len(body), len(scheduled)),
     }
@@ -99,6 +102,8 @@ def _tier_slice(records: list[dict]) -> dict:
         "n": len(records),
         "n_legal": legal,
         "reasoning": _mean(_legal_scores(records)),
+        "enum_limit": _status_count(records, "enum_limit"),
+        "node_limit": _status_count(records, "node_limit"),
     }
 
 
@@ -119,6 +124,13 @@ def _multi_step(records: list[dict], *, draws: int, seed: int) -> dict:
         "transport": len(episodes) - len(scored),
         "transport_rate": _ratio(len(episodes) - len(scored), len(episodes)),
         "counts": _counts(labeled),
+        "by_tier": {
+            tier: _tier_slice([record for record in labeled if _position_tier(record) == tier])
+            for tier in TIERS
+        },
+        "tier_needed": _supported_tiers(labeled),
+        "enum_limit": _status_count(labeled, "enum_limit"),
+        "node_limit": _status_count(labeled, "node_limit"),
         "clear_rate": _mean(clears),
         "clear_ci": bootstrap_mean(clears, draws=draws, seed=seed),
         "prefix_mean": _mean(prefixes),
@@ -283,11 +295,29 @@ def _n_legal(counts: dict[str, int]) -> int:
     return sum(counts[label] for label in LEGAL)
 
 
-def _difficulty_tier(record: dict):
-    """Cell tier when the log has one. Older logs only stored the position tier."""
-    if "tier_needed" in record:
-        return record.get("tier_needed")
-    return record.get("position_tier")
+def _position_tier(record: dict):
+    """Difficulty of the position before the move, not the tier of the cell played."""
+    tier = record.get("position_tier")
+    if tier:
+        return tier
+    return record.get("forced_tier")
+
+
+def _status_count(records: list[dict], status: str) -> int:
+    return sum(1 for record in records if record.get("exact_status") == status)
+
+
+def _supported_tiers(records: list[dict]) -> dict:
+    counts = {tier: 0 for tier in TIERS}
+    supported = 0
+    for record in records:
+        if record.get("label") != "supported":
+            continue
+        supported += 1
+        tier = record.get("tier_needed")
+        if tier in counts:
+            counts[tier] += 1
+    return {"n": supported, "counts": counts, "none": supported - sum(counts.values())}
 
 
 def _safe_opens(record: dict) -> float:
@@ -429,8 +459,17 @@ def _render_one_step(block: dict) -> list[str]:
         lines.append(
             f"  tier {tier:<10} reasoning {_num(sliver['reasoning'])}"
             f"  n={sliver['n']}  n_legal={sliver['n_legal']}"
+            f"  enum_limit={sliver['enum_limit']}  node_limit={sliver['node_limit']}"
         )
-    lines.append(f"  chance baseline (safe opens / hidden cells, mean per item) {_num(block['chance'])}")
+    lines.append(_tier_needed_line(block["tier_needed"]))
+    lines.append(
+        f"  exact fallback  enum_limit={block['enum_limit']}  node_limit={block['node_limit']}"
+    )
+    lines.append(
+        "  chance baseline (safe opens / hidden cells, mean per item; "
+        "exact_open_count when logged, otherwise oracle forced opens) "
+        f"{_num(block['chance'])}"
+    )
     return lines
 
 
@@ -446,7 +485,25 @@ def _render_multi_step(block: dict) -> list[str]:
         "  " + "  ".join(f"{label} {block['counts'][label]}" for label in LABELS)
     )
     lines.append(f"  mean prefix {_num(block['prefix_mean'])}")
+    for tier in TIERS:
+        sliver = block["by_tier"][tier]
+        lines.append(
+            f"  tier {tier:<10} reasoning {_num(sliver['reasoning'])}"
+            f"  n={sliver['n']}  n_legal={sliver['n_legal']}"
+            f"  enum_limit={sliver['enum_limit']}  node_limit={sliver['node_limit']}"
+        )
+    lines.append(_tier_needed_line(block["tier_needed"]))
+    lines.append(
+        f"  exact fallback  enum_limit={block['enum_limit']}  node_limit={block['node_limit']}"
+    )
     return lines
+
+
+def _tier_needed_line(block: dict) -> str:
+    parts = "  ".join(f"{tier} {block['counts'][tier]}" for tier in TIERS)
+    return (
+        f"  tier_needed on supported steps  n={block['n']}  {parts}  none {block['none']}"
+    )
 
 
 def _render_requests(block: dict) -> list[str]:

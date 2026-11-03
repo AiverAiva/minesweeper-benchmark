@@ -94,8 +94,11 @@ class EngineSession:
     def forced(self) -> dict:
         return self._checked({"op": "forced"})
 
-    def exact(self) -> dict:
-        return self._checked({"op": "exact"})
+    def exact(self, node_limit: int | None = None) -> dict:
+        payload: dict = {"op": "exact"}
+        if node_limit is not None:
+            payload["node_limit"] = node_limit
+        return self._checked(payload)
 
     def apply(self, action: dict) -> dict:
         return self._checked({"op": "apply", "action": action})

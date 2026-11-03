@@ -80,7 +80,12 @@ def test_five_rates_sum_to_one_and_reasoning_excludes_format_and_illegal():
     assert one["n_legal"] == 3
     assert one["reasoning"] == pytest.approx(1 / 3)
     assert one["reasoning_ci"]["low"] <= one["reasoning"] <= one["reasoning_ci"]["high"]
-    assert one["by_tier"]["single"] == {"n": 2, "n_legal": 1, "reasoning": pytest.approx(1)}
+    assert one["by_tier"]["single"]["n"] == 2
+    assert one["by_tier"]["single"]["n_legal"] == 1
+    assert one["by_tier"]["single"]["reasoning"] == pytest.approx(1)
+    assert one["by_tier"]["single"]["enum_limit"] == 0
+    assert one["enum_limit"] == 0
+    assert one["tier_needed"]["n"] == 1
     assert one["by_tier"]["subset"]["n"] == 2
     assert one["by_tier"]["subset"]["n_legal"] == 1
     assert one["by_tier"]["subset"]["reasoning"] == pytest.approx(0)
@@ -213,6 +218,23 @@ def test_paired_bootstrap_uses_items_present_on_both_sides():
     assert stats["n"] == 2
     assert stats["mean"] == pytest.approx(0.5)
     assert stats["low"] <= stats["mean"] <= stats["high"]
+
+
+def test_lucky_steps_stay_in_the_position_tier():
+    supported = one_step("a", "supported", "single", 1, 4, 1, 1, 1)
+    lucky = one_step("b", "lucky", "single", 1, 4, 1, 1, 1)
+    supported["tier_needed"] = "global"
+    lucky["tier_needed"] = None
+    lucky["exact_status"] = "enum_limit"
+    one = analyze([supported, lucky])["one_step"]
+    assert one["by_tier"]["single"]["n"] == 2
+    assert one["by_tier"]["single"]["n_legal"] == 2
+    assert one["by_tier"]["single"]["reasoning"] == pytest.approx(0.5)
+    assert one["by_tier"]["single"]["enum_limit"] == 1
+    assert one["by_tier"]["global"]["n"] == 0
+    assert one["tier_needed"]["counts"]["global"] == 1
+    assert one["tier_needed"]["none"] == 0
+    assert one["enum_limit"] == 1
 
 
 def test_summary_text_names_the_classes():

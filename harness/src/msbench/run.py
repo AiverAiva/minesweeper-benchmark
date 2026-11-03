@@ -14,7 +14,7 @@ from msbench.config import ConfigError, Settings, api_key, require_api
 from msbench.engine import EngineError, EngineSession, repo_root
 from msbench.progress import describe_action, duration, log
 from msbench.prompt import PROMPT_SHA256, render_prompt
-from msbench.score import LABELS, LEGAL, GoldError, classify, hidden_count, replay_gold
+from msbench.score import LABELS, LEGAL, GoldError, classify, hidden_count, prefetch, replay_gold
 
 
 @dataclass
@@ -370,8 +370,11 @@ def ask(
     sample_index: int,
     position_tier: str | None,
 ) -> dict:
+    judged, proven = prefetch(session)
     completion: Completion = complete(render_prompt(board_text))
-    judged = session.forced()
+    exact_status = proven.get("exact_status") or "ok"
+    exact_actions = proven.get("actions") or []
+    open_source = exact_actions if exact_status == "ok" else (judged.get("actions") or [])
     record = {
         "schema": 1,
         "run_id": meta.run_id,
@@ -403,6 +406,9 @@ def ask(
         "forced_open_count": sum(
             1 for action in judged.get("actions") or [] if action.get("kind") == "open"
         ),
+        "exact_status": exact_status,
+        "exact_actions": exact_actions,
+        "exact_open_count": sum(1 for action in open_source if action.get("kind") == "open"),
         "hidden_count": hidden_count(board_text),
         "status_after": None,
         "text_after": None,
@@ -415,7 +421,7 @@ def ask(
         record["position_tier"] = record["forced_tier"]
     if completion.transport_error:
         return record
-    record.update(classify(session, completion.action, judged, session.exact()))
+    record.update(classify(session, completion.action, judged, proven))
     return record
 
 

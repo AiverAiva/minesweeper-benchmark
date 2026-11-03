@@ -31,6 +31,32 @@ def scripted(action: dict | None, transport: str | None = None) -> Completion:
     )
 
 
+def test_exact_is_judged_before_the_model_is_asked(session):
+    order = []
+    original_exact = session.exact
+    original_forced = session.forced
+
+    def forced():
+        order.append("forced")
+        return original_forced()
+
+    def exact(node_limit=None):
+        order.append("exact")
+        return original_exact(node_limit)
+
+    session.forced = forced
+    session.exact = exact
+
+    def complete(_prompt):
+        order.append("model")
+        return scripted({"kind": "open", "at": {"row": 3, "col": 1}})
+
+    records = run_one_step(session, TEXTBOOK, "textbook", META, complete)
+    assert order == ["forced", "exact", "model"]
+    assert records[0]["exact_status"] == "ok"
+    assert records[0]["label"] == "supported"
+
+
 def test_one_step_reloads_each_gold_position(session, five_by_five):
     prompts = []
 
