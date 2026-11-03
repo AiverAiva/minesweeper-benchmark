@@ -7,8 +7,9 @@ use std::io::{self, BufRead, Write};
 
 use serde_json::{json, Value};
 
+use crate::exact::exact;
 use crate::fixture::Fixture;
-use crate::game::{Action, ApplyError, CellPos, Game};
+use crate::game::{Action, ActionKind, ApplyError, CellPos, Game, Visible};
 use crate::oracle::{forced, ForceError, ORACLE_VERSION};
 
 pub fn run_session() -> io::Result<()> {
@@ -37,6 +38,7 @@ pub fn handle_session_line(game: &mut Option<Game>, line: &str) -> Value {
         Some("new") => op_new(game, &value),
         Some("new_fixture") => op_new_fixture(game, &value),
         Some("forced") => op_forced(game),
+        Some("exact") => op_exact(game),
         Some("apply") => op_apply(game, &value),
         Some(other) => fail(Some(other), "parse", "unknown op".to_string(), None),
         None => fail(None, "parse", "missing op".to_string(), None),
@@ -175,6 +177,43 @@ fn op_forced(slot: &mut Option<Game>) -> Value {
     }
 }
 
+fn op_exact(slot: &mut Option<Game>) -> Value {
+    let Some(game) = slot else {
+        return fail(
+            Some("exact"),
+            "no_game",
+            "no game is loaded".to_string(),
+            None,
+        );
+    };
+    match exact(game.player()) {
+        Ok(judged) => {
+            let cells: Vec<Value> = judged
+                .cells
+                .iter()
+                .map(|(cell, tier)| json!({"row": cell.row, "col": cell.col, "tier": tier}))
+                .collect();
+            json!({
+                "ok": true,
+                "op": "exact",
+                "actions": judged.actions,
+                "cells": cells,
+            })
+        }
+        Err(error) => force_fail("exact", error),
+    }
+}
+
+fn force_fail(op: &str, error: ForceError) -> Value {
+    match error {
+        ForceError::Terminal => fail(Some(op), "terminal", error.to_string(), None),
+        ForceError::EnumLimit { cells } => {
+            fail(Some(op), "enum_limit", error.to_string(), Some(cells))
+        }
+        ForceError::Inconsistent => fail(Some(op), "inconsistent", error.to_string(), None),
+    }
+}
+
 fn op_apply(slot: &mut Option<Game>, value: &Value) -> Value {
     let Some(game) = slot else {
         return fail(
@@ -191,8 +230,24 @@ fn op_apply(slot: &mut Option<Game>, value: &Value) -> Value {
         Ok(action) => action,
         Err(error) => return fail(Some("apply"), "parse", error.to_string(), None),
     };
+    let was_hidden = matches!(
+        game.player().get(action.at.row, action.at.col),
+        Some(Visible::Hidden)
+    );
+    let is_mine = game
+        .truth()
+        .get(action.at.row, action.at.col)
+        .is_some_and(|value| value < 0);
+    let kind = action.kind;
     match game.apply(action) {
-        Ok(()) => state_value("apply", game),
+        Ok(()) => {
+            let mut body = state_value("apply", game);
+            if kind == ActionKind::Flag {
+                body["flag_placed"] = json!(was_hidden);
+                body["cell_is_mine"] = json!(is_mine);
+            }
+            body
+        }
         Err(ApplyError::Terminal) => fail(
             Some("apply"),
             "terminal",
@@ -356,5 +411,51 @@ mod tests {
             handle_session_line(&mut game, r#"{"op":"forced"}"#)["error"].as_str(),
             Some("no_game")
         );
+        assert_eq!(
+            handle_session_line(&mut game, r#"{"op":"exact"}"#)["error"].as_str(),
+            Some("no_game")
+        );
+    }
+
+    #[test]
+    fn exact_lists_the_textbook_open_with_its_own_tier() {
+        let mut game = None;
+        handle_session_line(&mut game, NEW_TEXTBOOK);
+        let judged = handle_session_line(&mut game, r#"{"op":"exact"}"#);
+        assert_eq!(judged["ok"].as_bool(), Some(true));
+        let actions = judged["actions"].as_array().unwrap();
+        let open = actions
+            .iter()
+            .find(|action| {
+                action["kind"].as_str() == Some("open")
+                    && action["at"]["row"].as_u64() == Some(3)
+                    && action["at"]["col"].as_u64() == Some(1)
+            })
+            .expect("open (3,1)");
+        assert_eq!(open["tier"].as_str(), Some("enumerate"));
+    }
+
+    #[test]
+    fn a_flag_reports_whether_it_was_placed_on_a_mine() {
+        let mut game = None;
+        handle_session_line(&mut game, NEW_TEXTBOOK);
+        let safe = handle_session_line(
+            &mut game,
+            r#"{"op":"apply","action":{"kind":"flag","at":{"row":3,"col":1}}}"#,
+        );
+        assert_eq!(safe["flag_placed"].as_bool(), Some(true));
+        assert_eq!(safe["cell_is_mine"].as_bool(), Some(false));
+        let mine = handle_session_line(
+            &mut game,
+            r#"{"op":"apply","action":{"kind":"flag","at":{"row":1,"col":1}}}"#,
+        );
+        assert_eq!(mine["flag_placed"].as_bool(), Some(true));
+        assert_eq!(mine["cell_is_mine"].as_bool(), Some(true));
+        let removed = handle_session_line(
+            &mut game,
+            r#"{"op":"apply","action":{"kind":"flag","at":{"row":1,"col":1}}}"#,
+        );
+        assert_eq!(removed["flag_placed"].as_bool(), Some(false));
+        assert_eq!(removed["cell_is_mine"].as_bool(), Some(true));
     }
 }

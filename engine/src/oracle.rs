@@ -127,18 +127,7 @@ fn deduce(
         let (safe, mines) = extend_global(player, safe, mines);
         return Ok((safe, mines, Tier::Subset));
     }
-    let (_coefficients, variables, _constants, _inside, _flagged) =
-        ms_toollib::refresh_matrixs(&board);
-    let widest = variables.iter().map(Vec::len).max().unwrap_or(0);
-    if widest > MAX_ENUM_CELLS {
-        return Err(ForceError::EnumLimit { cells: widest });
-    }
-    let (coefficients, variables, constants) = fresh_matrices(&board);
-    let (safe, mines) = split_cells(ms_toollib::solve_enumerate(
-        &coefficients,
-        &variables,
-        &constants,
-    ));
+    let (safe, mines) = run_enumerate(&board)?;
     if !safe.is_empty() || !mines.is_empty() {
         let (safe, mines) = extend_global(player, safe, mines);
         return Ok((safe, mines, Tier::Enumerate));
@@ -197,7 +186,9 @@ fn unknown_cells(player: &PlayerBoard) -> BTreeSet<CellPos> {
     cells
 }
 
-fn run_direct(board: &Vec<Vec<i32>>) -> Result<(BTreeSet<CellPos>, BTreeSet<CellPos>), ForceError> {
+pub(crate) fn run_direct(
+    board: &Vec<Vec<i32>>,
+) -> Result<(BTreeSet<CellPos>, BTreeSet<CellPos>), ForceError> {
     let mut marked = board.clone();
     let mut safe = BTreeSet::new();
     let mut mines = BTreeSet::new();
@@ -244,7 +235,9 @@ fn write_mark(board: &mut Vec<Vec<i32>>, cell: CellPos, value: i32) {
     board[row][col] = value;
 }
 
-fn run_subset(board: &Vec<Vec<i32>>) -> Result<(BTreeSet<CellPos>, BTreeSet<CellPos>), ForceError> {
+pub(crate) fn run_subset(
+    board: &Vec<Vec<i32>>,
+) -> Result<(BTreeSet<CellPos>, BTreeSet<CellPos>), ForceError> {
     let (mut coefficients, mut variables, mut constants, _, _) = ms_toollib::refresh_matrixs(board);
     let mut marked = board.to_vec();
     let found = ms_toollib::solve_minus(
@@ -255,6 +248,23 @@ fn run_subset(board: &Vec<Vec<i32>>) -> Result<(BTreeSet<CellPos>, BTreeSet<Cell
     )
     .map_err(|_| ForceError::Inconsistent)?;
     Ok(split_cells(found))
+}
+
+pub(crate) fn run_enumerate(
+    board: &Vec<Vec<i32>>,
+) -> Result<(BTreeSet<CellPos>, BTreeSet<CellPos>), ForceError> {
+    let (_coefficients, variables, _constants, _inside, _flagged) =
+        ms_toollib::refresh_matrixs(board);
+    let widest = variables.iter().map(Vec::len).max().unwrap_or(0);
+    if widest > MAX_ENUM_CELLS {
+        return Err(ForceError::EnumLimit { cells: widest });
+    }
+    let (coefficients, variables, constants) = fresh_matrices(board);
+    Ok(split_cells(ms_toollib::solve_enumerate(
+        &coefficients,
+        &variables,
+        &constants,
+    )))
 }
 
 fn fresh_matrices(
@@ -272,7 +282,7 @@ fn split_cells(
     (safe, mines)
 }
 
-fn solver_board(player: &PlayerBoard) -> Vec<Vec<i32>> {
+pub(crate) fn solver_board(player: &PlayerBoard) -> Vec<Vec<i32>> {
     let mut board = vec![vec![10; player.cols() as usize]; player.rows() as usize];
     for row in 1..=player.rows() {
         for col in 1..=player.cols() {
