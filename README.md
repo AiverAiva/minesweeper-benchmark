@@ -33,6 +33,8 @@ uv --project harness run pytest
 
 ## Generate a board
 
+Omit `--count` to write one fixture and print it, as before:
+
 ```sh
 mkdir -p runs
 cargo run --bin msengine -- generate \
@@ -41,6 +43,34 @@ cargo run --bin msengine -- generate \
 ```
 
 `--level beginner|intermediate|expert` fills in the modern sizes (9×9/10, 16×16/40, 16×30/99) so the three flags can be omitted; an explicit `--rows`, `--cols`, or `--mines` still wins one by one.
+
+`--count N --dir DIR` tries N consecutive seeds starting at `--seed` (the closed range `S .. S+N-1`). That is try-N, not keep-N boards. `--count` requires `--seed` and `--dir` and cannot be used with `--out`. `--attempts` is the rejection budget for each seed, not for the whole run. Each kept board is `DIR/board-{seed}.json`. A seed that burns its budget writes `DIR/board-{seed}.exhausted` and the run continues; exit 0 means the range finished without a hard error, even if every seed exhausted. `catalog.json` is a last-run report over that range, rewritten after every seed. Do not mix levels in one `--dir`.
+
+```sh
+mkdir -p runs/beginner
+cargo run --bin msengine -- generate --seed 1 --count 32 --level beginner --dir runs/beginner
+```
+
+```sh
+mkdir -p runs/intermediate
+cargo run --bin msengine -- generate --seed 1 --count 32 --level intermediate --dir runs/intermediate
+```
+
+Default `--overwrite skip` leaves an existing `board-{seed}.json` (after a size check) and a matching exhausted marker in place, so a killed run can be resumed with the same command. `--overwrite replace` deletes both names and generates again. A later run with a higher `--attempts` retries only those exhausted markers whose stored budget is smaller.
+
+Expert generation is CPU-bound. Use a release binary. Three successful **debug** generations took 35, 438, and 1666 attempts (about 120 ms per attempt, ≈0.14% keep); that does not bound release.
+
+```sh
+cargo run --release --bin msengine -- generate --seed 1 --count 8 --level expert --dir runs/expert
+```
+
+PowerShell 5.1 does not expand `board-*.json` into `msbench`. Pass full paths:
+
+```powershell
+uv run --project harness msbench gold (Get-ChildItem runs\beginner\board-*.json | ForEach-Object FullName)
+```
+
+`msbench continue` looks up `runs/{stem}.json`. For `runs/beginner/board-1.json` that stem is `board-1`, so pass `--fixture runs/beginner/board-1.json` (repeatable).
 
 Mines are drawn uniformly from the cells outside the first click's neighborhood, so that click is an opening. The default click is the center cell, `((rows + 1) / 2, (cols + 1) / 2)`. Generation tries up to 5000 layouts. A board is kept only when every later position still has a forced open. `gold` is one such path: open only, no flags, and at each step the forced open with the lowest coordinate.
 
