@@ -100,9 +100,10 @@ uv run --project harness msbench one-step runs/beginner.json
 uv run --project harness msbench multi-step runs/beginner.json
 uv run --project harness msbench continue runs/<run>.jsonl --timeout 300
 uv run --project harness msbench summary runs/<run>.jsonl
+uv run --project harness msbench rescore runs/<run>.jsonl
 ```
 
-`one-step` asks once at every position along `gold`. Each item reloads the fixture and replays the gold prefix up to that position. `multi-step` keeps one engine session from the opening until the mine explodes or the board is won. Guesses and rejected moves are recorded and play continues; three straight steps without board progress end the episode. Each model call is a new request containing the fixed prompt and the current board. Earlier replies are not sent back.
+`one-step` asks once at every position along `gold`. Each item reloads the fixture and replays the gold prefix up to that position. `multi-step` keeps one engine session from the opening until the mine explodes or the board is won. Guesses and rejected moves are recorded and play continues; three straight steps without board progress end the episode. Each model call is a new request containing the fixed prompt and the current board. Earlier replies are not sent back. `rescore` reads a finished JSONL log, replays it on the frozen board, and prints the old label beside the label from the current rules. It does not call a model. If the board JSON is not at `runs/{fixture}.json`, pass `--fixture path/to/board.json`, the same way `continue` does.
 
 Logs are written to `runs/{run_id}-{mode}.jsonl`. Records stream to the file as each move is scored. `continue` resumes a multi-step log that stopped on a transport failure (timeout, HTTP 429/5xx, empty connection), a stall (three steps with no board progress), or a crash while the board was still playing. It replays applied moves onto the same frozen board and asks again from the interrupted step. A stall resume starts at the next step with a fresh stall limit. Finished games (mine, clear, step cap) are left as they are. Model, protocol, and temperature come from the log unless you pass `--model`, `--protocol`, or `--temperature`. `--timeout` and `--max-retries` always come from the current flags or env, so a longer timeout can finish a run that hit the default 120s. Default appends new records to the same JSONL. `--out other.jsonl` writes the playable prefix plus the new steps to a new file. If the board JSON is not at `runs/{fixture}.json`, pass `--fixture path/to/board.json`. `summary` treats a retried `step_index` as the last record at that step. Passing exactly two logs also prints a paired bootstrap of the second file minus the first.
 
@@ -157,18 +158,21 @@ A fixture is the JSON written by `msengine generate`: the mine coordinates, the 
 
 ## Scoring
 
-A response that has a body receives exactly one of five labels. A forced move scores 1. The other four score 0. Rates use the number of responses that had a body as the denominator.
+A response that has a body receives exactly one of six labels. A supported move scores 1. The other five score 0. Rates use the number of responses that had a body as the denominator.
 
 | Order | Label | Meaning |
 | --- | --- | --- |
 | 1 | Format | The reply does not contain exactly one valid `minesweeper_move` call. |
 | 2 | Illegal | The engine rejects the action. The board is unchanged. |
-| 3 | Supported | The action is in the live forced set. Open, flag, and chord all count. Any forced cell counts, not only the gold cell. |
-| 4 | Mine | The action applies and the game is lost. |
-| 5 | Lucky | The action applies and the game stays in progress, or is won, but the cell was not safe in every consistent layout. |
+| 3 | Mine | The action applies and the game is lost. |
+| 4 | Misflag | The action places a flag on a cell that is not a mine. |
+| 5 | Supported | The action is safe in every mine layout consistent with the visible numbers and the mine total: an open of a necessarily safe cell, a flag of a necessarily mined cell, or a chord whose every opened cell is necessarily safe. |
+| 6 | Lucky | The action applies, the game is not lost, and none of the supported cases apply. |
 
-A cell is forced when every mine layout consistent with the visible numbers agrees on it: safe in all of them, or a mine in all of them. Player flags are marks and are removed before the solver runs. The mine total completes the local answer: when every mine is already proven, all remaining hidden cells are safe; when the hidden cells exactly fill the quota, they are all mines. Single-cell conclusions are written back and the same rule runs until it adds nothing; that closure stays in the single tier. Subset reasoning is used only when the single-cell closure is empty, enumeration only after that, and the mine-count completion runs on top of whatever the local tiers found. Only a position with no local deduction at all is labeled with the global tier. A frontier block wider than 55 cells discards the board.
+The exact judge uses only the player-visible board. Flags are marks and are removed before the search. Unknown cells split into the frontier (adjacent to an opened number) and the interior. Each frontier component is enumerated, and a solution is kept only when the mines still to place fit in the interior. A cell is safe or a mine when every kept layout agrees. One agreeing layout on each side is enough to leave it undecided; layouts are not weighted. A frontier component wider than 55 cells is rejected.
 
-The reasoning rate is supported / (supported + lucky + mine). Format and illegal counts are reported beside it. Multi-step also reports the clear rate and the prefix, the number of leading supported steps. A clear counts a win even when the path includes guesses. The episode stops only on a mine, a win, a transport failure, the step cap, or three consecutive steps without board progress. A timeout, HTTP 429, HTTP 5xx, or a response with no body is a transport failure. Transport failures stay outside the five labels, and a multi-step episode that fails this way is left out of the clear rate and the prefix mean.
+`tier_needed` on a log record is the shallowest oracle tier that proves the chosen cell: single, subset, enumerate, or global. The tiers are tested separately on the original board, so a hit in single does not skip the later tiers. It is a difficulty label only. Gold paths still follow `forced()`, which stops at the first tier that finds any cell and then applies only the two mine-count completions (every mine already proved, or the unknown cells exactly fill the quota). A cell that is safe only because of the full mine total can be supported even when `forced()` never reaches it.
+
+The reasoning rate is supported / (supported + lucky + mine + misflag). Format and illegal counts are reported beside it. Multi-step also reports the clear rate and the prefix, the number of leading supported steps. A clear counts a win even when the path includes guesses. The episode stops only on a mine, a win, a transport failure, the step cap, or three consecutive steps without board progress. A timeout, HTTP 429, HTTP 5xx, or a response with no body is a transport failure. Transport failures stay outside the six labels, and a multi-step episode that fails this way is left out of the clear rate and the prefix mean. `rescore` reprints labels for a log that was scored before this rule.
 
 Each request log stores latency, `finish_reason`, input tokens, output tokens, reasoning tokens, and total tokens. Total tokens are input plus output. Reasoning tokens are already included in the output count. Token counts and latency are reported next to the score and are not added into it.
